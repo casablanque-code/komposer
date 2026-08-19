@@ -1,0 +1,103 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+// renderAddServiceDialog renders the modal dialog for adding a new service.
+func (m Model) renderAddServiceDialog() string {
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorTitle).
+		Render("Add New Service")
+
+	prompt := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Render("Enter service name:")
+
+	input := m.addDialog.nameInput.View()
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		prompt,
+		input,
+	)
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorAccent).
+		Padding(1, 2).
+		Width(40).
+		Render(content)
+
+	return lipgloss.Place(
+		m.width,
+		m.height/4,
+		lipgloss.Center,
+		lipgloss.Center,
+		dialog,
+	)
+}
+
+// renderConfirmDeleteDialog renders the confirmation dialog for deleting a service.
+func (m Model) renderConfirmDeleteDialog() string {
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorDanger).
+		Render("Confirm Delete")
+
+	prompt := fmt.Sprintf("Delete service '%s'?", m.confirmDelete.serviceName)
+
+	hint := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Render("Press Y to confirm, N to cancel")
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		prompt,
+		"",
+		hint,
+	)
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorDanger).
+		Padding(1, 2).
+		Width(40).
+		Render(content)
+
+	return lipgloss.Place(
+		m.width,
+		m.height/4,
+		lipgloss.Center,
+		lipgloss.Center,
+		dialog,
+	)
+}
+
+// renderEditableForm renders the interactive form with text inputs.
+func (m Model) renderEditableForm() string {
+	if len(m.formInputs) == 0 {
+		return ""
+	}
+
+	labels := []string{"Image:", "Build:", "Ports:", "Environment:", "Volumes:", "Restart:"}
+
+	var lines []string
+	for i, label := range labels {
+		labelStyle := lipgloss.NewStyle().
+			Foreground(colorSubtle).
+			Width(12).
+			Align(lipgloss.Right)
+
+		line := labelStyle.Render(label) + " " + m.formInputs[i].View()
+		lines = append(lines, line)
+	}
+
+	return strings.Join(lines, "\n")
+}

@@ -6,6 +6,8 @@ package tui
 import (
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/casablanque-code/komposer/pkg/composer"
@@ -35,10 +37,20 @@ type Model struct {
 	width  int
 	height int
 
-	// selected index into config.Services for the left pane cursor.
-	// Real list navigation (bubbles/list) lands in Phase 3; for now this
-	// just tracks which service name is highlighted.
 	selected int
+
+	// Phase 3: UI modes and dialogs
+	currentMode      mode
+	addDialog        addServiceDialog
+	confirmDelete    confirmDeleteDialog
+
+	// Phase 3: editable form fields for center pane
+	formInputs       []textinput.Model
+	focusedFormField int
+
+	// Phase 3: scrollable YAML preview
+	yamlViewport viewport.Model
+	viewportReady bool
 
 	quitting bool
 }
@@ -60,9 +72,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+		// Initialize viewport for YAML preview on first WindowSizeMsg
+		if !m.viewportReady {
+			_, _, rightW := paneWidths(m.width)
+			headerHeight := lipglossHeight(paneTitleStyle.Render("Preview: docker-compose.yml")) + 2
+			contentHeight := m.height - headerHeight - 2
+			if contentHeight < 1 {
+				contentHeight = 1
+			}
+			m.yamlViewport = viewport.New(rightW, contentHeight)
+			m.viewportReady = true
+		}
 		return m, nil
 
 	case tea.KeyMsg:
+		// Handle mode-specific keys first
+		switch m.currentMode {
+		case modeAddService:
+			return m.updateAddService(msg)
+		case modeConfirmDelete:
+			return m.updateConfirmDelete(msg)
+		case modeEditField:
+			return m.updateEditField(msg)
+		}
+
+		// Normal mode keys
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.quitting = true
@@ -75,10 +110,142 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "shift+tab":
 			m.focus = prevPane(m.focus)
 			return m, nil
+
+		case "a":
+			if m.focus == paneLeft {
+				m.currentMode = modeAddService
+				m.addDialog = newAddServiceDialog()
+			}
+			return m, nil
+
+		case "d":
+			if m.focus == paneLeft && len(m.config.Services) > 0 {
+				m.currentMode = modeConfirmDelete
+				m.confirmDelete = confirmDeleteDialog{
+					serviceName: m.config.Services[m.selected].Name,
+				}
+			}
+			return m, nil
+
+		case "e", "enter":
+			if m.focus == paneCenter && len(m.config.Services) > 0 {
+				m.currentMode = modeEditField
+				m.initFormInputs()
+			}
+			return m, nil
+
+		// Scroll YAML preview when right pane is focused
+		case "up", "k":
+			if m.focus == paneRight && m.viewportReady {
+				m.yamlViewport.LineUp(1)
+				return m, nil
+			} else if m.focus == paneLeft && len(m.config.Services) > 0 {
+				m.selected = (m.selected - 1 + len(m.config.Services)) % len(m.config.Services)
+				return m, nil
+			}
+			return m, nil
+
+		case "down", "j":
+			if m.focus == paneRight && m.viewportReady {
+				m.yamlViewport.LineDown(1)
+				return m, nil
+			} else if m.focus == paneLeft && len(m.config.Services) > 0 {
+				m.selected = (m.selected + 1) % len(m.config.Services)
+				return m, nil
+			}
+			return m, nil
+
+		case "pgup":
+			if m.focus == paneRight && m.viewportReady {
+				m.yamlViewport.ViewUp()
+				return m, nil
+			}
+
+		case "pgdown":
+			if m.focus == paneRight && m.viewportReady {
+				m.yamlViewport.ViewDown()
+				return m, nil
+			}
 		}
 	}
 
 	return m, nil
+}
+
+// updateAddService handles input in the "add service" dialog.
+func (m Model) updateAddService(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch msg.String() {
+	case "esc":
+		m.currentMode = modeNormal
+		return m, nil
+
+	case "enter":
+		name := strings.TrimSpace(m.addDialog.nameInput.Value())
+		if name != "" && m.config.GetService(name) == nil {
+			m.config.AddService(name)
+			m.selected = len(m.config.Services) - 1
+		}
+		m.currentMode = modeNormal
+		return m, nil
+	}
+
+	m.addDialog.nameInput, cmd = m.addDialog.nameInput.Update(msg)
+	return m, cmd
+}
+
+// updateConfirmDelete handles input in the delete confirmation dialog.
+func (m Model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		m.config.RemoveService(m.confirmDelete.serviceName)
+		if m.selected >= len(m.config.Services) && len(m.config.Services) > 0 {
+			m.selected = len(m.config.Services) - 1
+		}
+		m.currentMode = modeNormal
+		return m, nil
+
+	case "n", "N", "esc":
+		m.currentMode = modeNormal
+		return m, nil
+	}
+
+	return m, nil
+}
+
+// updateEditField handles input in the form edit mode.
+func (m Model) updateEditField(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch msg.String() {
+	case "esc":
+		m.saveFormToService()
+		m.currentMode = modeNormal
+		return m, nil
+
+	case "enter":
+		m.saveFormToService()
+		m.currentMode = modeNormal
+		return m, nil
+
+	case "tab":
+		m.nextFormField()
+		return m, nil
+
+	case "shift+tab":
+		m.prevFormField()
+		return m, nil
+	}
+
+	// Update the focused input field
+	if len(m.formInputs) > 0 && m.focusedFormField < len(m.formInputs) {
+		m.formInputs[m.focusedFormField], cmd = m.formInputs[m.focusedFormField].Update(msg)
+		// Sync changes to config in real-time for preview
+		m.saveFormToService()
+	}
+
+	return m, cmd
 }
 
 func nextPane(p pane) pane {
@@ -108,13 +275,10 @@ func (m Model) View() string {
 		return ""
 	}
 	if m.width == 0 {
-		// First frame, before the initial WindowSizeMsg has arrived.
 		return "initializing..."
 	}
 
-	helpBar := helpStyle.Render(
-		"tab: switch pane • a: add service • d: delete • ctrl+p: presets • ctrl+s: save • q: quit",
-	)
+	helpBar := m.renderHelpBar()
 	contentHeight := m.height - lipglossHeight(helpBar) - 1
 	if contentHeight < 1 {
 		contentHeight = 1
@@ -128,7 +292,38 @@ func (m Model) View() string {
 
 	body := joinHorizontal(left, center, right)
 
-	return body + "\n" + helpBar
+	// Overlay dialogs on top of the main view if active
+	mainView := body + "\n" + helpBar
+
+	switch m.currentMode {
+	case modeAddService:
+		return mainView + "\n\n" + m.renderAddServiceDialog()
+	case modeConfirmDelete:
+		return mainView + "\n\n" + m.renderConfirmDeleteDialog()
+	}
+
+	return mainView
+}
+
+func (m Model) renderHelpBar() string {
+	var help string
+	switch m.currentMode {
+	case modeAddService:
+		help = "enter: confirm • esc: cancel"
+	case modeConfirmDelete:
+		help = "y: delete • n: cancel"
+	case modeEditField:
+		help = "tab/shift+tab: next/prev field • enter/esc: save & close"
+	default:
+		if m.focus == paneLeft {
+			help = "↑↓: navigate • a: add • d: delete • tab: switch pane • q: quit"
+		} else if m.focus == paneCenter {
+			help = "enter/e: edit service • tab: switch pane • q: quit"
+		} else {
+			help = "tab: switch pane • q: quit"
+		}
+	}
+	return helpStyle.Render(help)
 }
 
 // paneWidths computes the inner content width (excluding the 2-column
@@ -179,10 +374,20 @@ func (m Model) renderLeftPane(width, height int) string {
 func (m Model) renderCenterPane(width, height int) string {
 	title := paneTitleStyle.Render("Service Config")
 
-	body := helpStyle.Render("Select or add a service to edit it here.")
-	if len(m.config.Services) > 0 {
+	var body string
+	if len(m.config.Services) == 0 {
+		body = helpStyle.Render("Press 'a' to add a service")
+	} else {
 		entry := m.config.Services[clamp(m.selected, 0, len(m.config.Services)-1)]
-		body = renderServiceForm(entry)
+		if m.currentMode == modeEditField {
+			body = m.renderEditableForm()
+		} else {
+			body = renderServiceForm(entry)
+			if m.focus == paneCenter {
+				hint := "\n\n" + helpStyle.Render("Press Enter or 'e' to edit")
+				body += hint
+			}
+		}
 	}
 
 	content := title + "\n" + body
@@ -201,7 +406,16 @@ func (m Model) renderRightPane(width, height int) string {
 		body = helpStyle.Render("(empty — add a service to see YAML)")
 	}
 
-	content := title + "\n" + body
+	// Use viewport for scrollable content when ready
+	var content string
+	if m.viewportReady {
+		m.yamlViewport.SetContent(body)
+		viewportContent := m.yamlViewport.View()
+		content = title + "\n" + viewportContent
+	} else {
+		content = title + "\n" + body
+	}
+
 	return paneStyle(m.focus == paneRight).Width(width).Height(height).Render(content)
 }
 
