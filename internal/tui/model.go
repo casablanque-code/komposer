@@ -5,9 +5,11 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/casablanque-code/komposer/pkg/composer"
@@ -43,6 +45,7 @@ type Model struct {
 	currentMode      mode
 	addDialog        addServiceDialog
 	confirmDelete    confirmDeleteDialog
+	presetPicker     presetPickerDialog
 
 	// Phase 3: editable form fields for center pane
 	formInputs       []textinput.Model
@@ -51,6 +54,9 @@ type Model struct {
 	// Phase 3: scrollable YAML preview
 	yamlViewport viewport.Model
 	viewportReady bool
+
+	// Phase 4: save state
+	lastSave saveResult
 
 	quitting bool
 }
@@ -69,6 +75,23 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case saveResult:
+		m.lastSave = msg
+		if msg.err == nil {
+			m.currentMode = modeSaved
+			return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+				return clearSaveBannerMsg{}
+			})
+		}
+		m.currentMode = modeNormal
+		return m, nil
+
+	case clearSaveBannerMsg:
+		if m.currentMode == modeSaved {
+			m.currentMode = modeNormal
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -95,6 +118,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirmDelete(msg)
 		case modeEditField:
 			return m.updateEditField(msg)
+		case modePresetPicker:
+			return m.updatePresetPicker(msg)
 		}
 
 		// Normal mode keys
@@ -126,6 +151,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+
+		case "ctrl+p":
+			m.currentMode = modePresetPicker
+			m.presetPicker = newPresetPickerDialog()
+			return m, nil
+
+		case "ctrl+s":
+			return m, m.saveFile()
 
 		case "e", "enter":
 			if m.focus == paneCenter && len(m.config.Services) > 0 {
@@ -292,14 +325,33 @@ func (m Model) View() string {
 
 	body := joinHorizontal(left, center, right)
 
-	// Overlay dialogs on top of the main view if active
 	mainView := body + "\n" + helpBar
+
+	if m.currentMode == modeSaved && m.lastSave.err == nil {
+		banner := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("0")).
+			Background(colorSuccess).
+			Padding(0, 2).
+			Bold(true).
+			Render("✓ Saved " + m.lastSave.filename)
+		mainView = banner + "\n" + mainView
+	} else if m.lastSave.err != nil {
+		banner := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("0")).
+			Background(colorDanger).
+			Padding(0, 2).
+			Bold(true).
+			Render("✗ Error: " + m.lastSave.err.Error())
+		mainView = banner + "\n" + mainView
+	}
 
 	switch m.currentMode {
 	case modeAddService:
 		return mainView + "\n\n" + m.renderAddServiceDialog()
 	case modeConfirmDelete:
 		return mainView + "\n\n" + m.renderConfirmDeleteDialog()
+	case modePresetPicker:
+		return mainView + "\n\n" + m.renderPresetPickerDialog()
 	}
 
 	return mainView
@@ -314,13 +366,19 @@ func (m Model) renderHelpBar() string {
 		help = "y: delete • n: cancel"
 	case modeEditField:
 		help = "tab/shift+tab: next/prev field • enter/esc: save & close"
+	case modePresetPicker:
+		if m.presetPicker.stage == 0 {
+			help = "↑↓: navigate • enter: select • esc: cancel"
+		} else {
+			help = "enter: confirm • esc: back"
+		}
 	default:
 		if m.focus == paneLeft {
-			help = "↑↓: navigate • a: add • d: delete • tab: switch pane • q: quit"
+			help = "↑↓: navigate • a: add • d: delete • ctrl+p: presets • ctrl+s: save • tab: switch • q: quit"
 		} else if m.focus == paneCenter {
-			help = "enter/e: edit service • tab: switch pane • q: quit"
+			help = "enter/e: edit • ctrl+s: save • tab: switch • q: quit"
 		} else {
-			help = "tab: switch pane • q: quit"
+			help = "↑↓: scroll • ctrl+s: save • tab: switch • q: quit"
 		}
 	}
 	return helpStyle.Render(help)

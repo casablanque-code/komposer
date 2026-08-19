@@ -10,9 +10,9 @@ Work in progress, built in phases:
 
 - [x] Phase 1 — project setup & domain model (`pkg/composer`)
 - [x] Phase 2 — base 3-pane UI layout (Lipgloss)
-- [ ] Phase 3 — state management & navigation
-- [ ] Phase 4 — live preview
-- [ ] Phase 5 — presets & file saving
+- [x] Phase 3 — state management & navigation (add/delete, form editing, scrollable preview)
+- [x] Phase 4 — presets & file saving (PostgreSQL, Redis, Nginx, MySQL, MongoDB)
+- [ ] Phase 5 — validation & import
 
 ## Requirements
 
@@ -21,25 +21,35 @@ Work in progress, built in phases:
 ## Setup
 
 ```sh
-go mod tidy   # fetches bubbletea, lipgloss, bubbles, yaml.v3 and writes go.sum
-go build ./...
+go mod tidy
+go build -o komposer.exe .
 ```
-
-> go.sum is not checked in yet — this repo was assembled without network
-> access, so `go mod tidy` needs to run once locally to resolve and pin
-> dependency checksums before the module will build.
 
 ## Run
 
 ```sh
-go run .
+./komposer.exe
 ```
 
-## Keybindings (planned)
+## Keybindings
 
+### Navigation
 - `Tab` / `Shift+Tab` — switch focus between panes
-- `a` — add a new service
-- `d` — delete selected service
-- `Ctrl+P` — open preset picker (Postgres, Redis, Nginx, ...)
+- `↑` / `↓` or `k` / `j` — navigate services (left pane) or scroll YAML (right pane)
+- `PgUp` / `PgDown` — scroll YAML preview (right pane)
+
+### Services
+- `a` — add new service (prompts for name)
+- `d` — delete selected service (prompts for confirmation)
+- `Enter` or `e` — edit selected service (center pane)
+
+### Form Editing
+- `Tab` / `Shift+Tab` — next/previous field
+- `Enter` or `Esc` — save and exit edit mode
+
+### Presets & Saving
+- `Ctrl+P` — open preset picker (PostgreSQL, Redis, Nginx, MySQL, MongoDB)
 - `Ctrl+S` — save `docker-compose.yml`
+
+### General
 - `q` / `Ctrl+C` — quit

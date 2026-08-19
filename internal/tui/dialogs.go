@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/casablanque-code/komposer/pkg/composer"
 )
 
 // renderAddServiceDialog renders the modal dialog for adding a new service.
@@ -74,6 +76,94 @@ func (m Model) renderConfirmDeleteDialog() string {
 	return lipgloss.Place(
 		m.width,
 		m.height/4,
+		lipgloss.Center,
+		lipgloss.Center,
+		dialog,
+	)
+}
+
+func (m Model) renderPresetPickerDialog() string {
+	if m.presetPicker.stage == 0 {
+		return m.renderPresetList()
+	}
+	return m.renderPresetNameInput()
+}
+
+func (m Model) renderPresetList() string {
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorTitle).
+		Render("Choose Preset")
+
+	var items []string
+	for i, preset := range composer.Presets {
+		cursor := "  "
+		if i == m.presetPicker.selected {
+			cursor = "> "
+		}
+		line := cursor + preset.Name + " — " + preset.Description
+		items = append(items, line)
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		strings.Join(items, "\n"),
+		"",
+		lipgloss.NewStyle().Foreground(colorSubtle).Render("↑↓: navigate • enter: select • esc: cancel"),
+	)
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorAccent).
+		Padding(1, 2).
+		Width(70).
+		Render(content)
+
+	return lipgloss.Place(
+		m.width,
+		m.height/2,
+		lipgloss.Center,
+		lipgloss.Center,
+		dialog,
+	)
+}
+
+func (m Model) renderPresetNameInput() string {
+	preset := composer.Presets[m.presetPicker.chosenPreset]
+
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorTitle).
+		Render("Name Your Service")
+
+	presetInfo := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Render(fmt.Sprintf("Preset: %s", preset.Name))
+
+	prompt := "Service name:"
+
+	input := m.presetPicker.nameInput.View()
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		presetInfo,
+		"",
+		prompt,
+		input,
+	)
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorAccent).
+		Padding(1, 2).
+		Width(50).
+		Render(content)
+
+	return lipgloss.Place(
+		m.width,
+		m.height/3,
 		lipgloss.Center,
 		lipgloss.Center,
 		dialog,
