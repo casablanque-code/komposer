@@ -1,0 +1,5 @@
+/komposer
+/dist/
+docker-compose.yml
+*.test
+.DS_Store
