@@ -403,7 +403,21 @@ func (m Model) View() string {
 
 	// Normal view rendering
 	helpBar := m.renderHelpBar()
-	contentHeight := m.height - lipglossHeight(helpBar) - 1
+
+	// The save/error banner (if shown) adds one extra row above the main
+	// view. Reserve that row up front so toggling the banner never shifts
+	// the pane layout by a line — this was previously computed after
+	// contentHeight, causing the whole UI to visibly jump on every save.
+	bannerLines := 0
+	if m.currentMode == modeSaved || m.lastSave.err != nil {
+		bannerLines = 1
+	}
+
+	// contentHeight is the exact number of rows available to the 3 panes:
+	// total terminal rows, minus the help bar row, minus the banner row
+	// if present. (Previous version subtracted an extra stray "-1" here,
+	// which under-filled the panes by one row on every frame.)
+	contentHeight := m.height - lipglossHeight(helpBar) - bannerLines
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
@@ -524,7 +538,11 @@ func (m Model) renderCenterPane(width, height int) string {
 
 	var body string
 	if len(m.config.Services) == 0 {
-		body = helpStyle.Render("Press 'a' to add a service")
+		hint := "No services yet. Switch to the left pane and press 'a' to add one."
+		if m.focus == paneLeft {
+			hint = "Press 'a' to add a service."
+		}
+		body = helpStyle.Render(hint)
 	} else {
 		entry := m.config.Services[clamp(m.selected, 0, len(m.config.Services)-1)]
 		if m.currentMode == modeEditField {

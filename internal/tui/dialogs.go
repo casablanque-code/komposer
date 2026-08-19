@@ -9,6 +9,41 @@ import (
 	"github.com/casablanque-code/komposer/pkg/composer"
 )
 
+// dialogContentWidth returns a safe content width for modal dialogs: wide
+// enough to be readable, but never wider than the terminal can actually
+// show. Every dialog's wrappable text should be rendered at this width
+// before being boxed, so long strings (preset descriptions, validation
+// messages) wrap instead of forcing the dialog wider than the screen —
+// lipgloss.Place() does not shrink oversized content, it just breaks.
+func dialogContentWidth(termWidth int) int {
+	const preferred = 56  // comfortable reading width
+	const margin = 6      // border(2) + padding(4) the dialog box adds
+
+	max := termWidth - margin
+	if max < 20 {
+		max = 20 // absolute floor so tiny terminals don't collapse to 0
+	}
+	if preferred < max {
+		return preferred
+	}
+	return max
+}
+
+// renderDialogBox wraps already-built content in the standard bordered
+// dialog chrome and centers it on screen, clamping its total width so it
+// can never exceed the terminal (the previous overflow was the root cause
+// of the preset picker "falling apart" on narrower terminals).
+func renderDialogBox(termWidth, termHeight int, borderColor lipgloss.Color, content string) string {
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(1, 2).
+		MaxWidth(termWidth).
+		Render(content)
+
+	return lipgloss.Place(termWidth, termHeight, lipgloss.Center, lipgloss.Center, dialog)
+}
+
 // renderAddServiceDialog renders the modal dialog for adding a new service.
 func (m Model) renderAddServiceDialog() string {
 	title := lipgloss.NewStyle().
@@ -35,13 +70,7 @@ func (m Model) renderAddServiceDialog() string {
 		hint,
 	)
 
-	dialog := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorAccent).
-		Padding(1, 2).
-		Render(content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
+	return renderDialogBox(m.width, m.height, colorAccent, content)
 }
 
 // renderConfirmDeleteDialog renders the confirmation dialog for deleting a service.
@@ -65,13 +94,7 @@ func (m Model) renderConfirmDeleteDialog() string {
 		hint,
 	)
 
-	dialog := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorDanger).
-		Padding(1, 2).
-		Render(content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
+	return renderDialogBox(m.width, m.height, colorDanger, content)
 }
 
 func (m Model) renderPresetPickerDialog() string {
@@ -87,14 +110,24 @@ func (m Model) renderPresetList() string {
 		Foreground(colorTitle).
 		Render("Choose Preset")
 
+	contentWidth := dialogContentWidth(m.width)
+
+	nameStyle := lipgloss.NewStyle().Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(colorSubtle).Width(contentWidth - 2)
+
 	var items []string
 	for i, preset := range composer.Presets {
 		cursor := "  "
 		if i == m.presetPicker.selected {
 			cursor = "> "
 		}
-		line := cursor + preset.Name + " — " + preset.Description
-		items = append(items, line)
+		name := nameStyle.Render(preset.Name)
+		// Description gets its own indented, word-wrapped line instead of
+		// being crammed onto the name's line — a single "Name — long
+		// description" line was routinely 70-90 columns wide and broke
+		// the dialog on any terminal narrower than that.
+		desc := descStyle.Render("  " + preset.Description)
+		items = append(items, cursor+name+"\n"+desc)
 	}
 
 	hint := lipgloss.NewStyle().
@@ -104,18 +137,12 @@ func (m Model) renderPresetList() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
-		strings.Join(items, "\n"),
+		strings.Join(items, "\n\n"),
 		"",
 		hint,
 	)
 
-	dialog := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorAccent).
-		Padding(1, 2).
-		Render(content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
+	return renderDialogBox(m.width, m.height, colorAccent, content)
 }
 
 func (m Model) renderPresetNameInput() string {
@@ -149,13 +176,7 @@ func (m Model) renderPresetNameInput() string {
 		hint,
 	)
 
-	dialog := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorAccent).
-		Padding(1, 2).
-		Render(content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
+	return renderDialogBox(m.width, m.height, colorAccent, content)
 }
 
 // renderEditableForm renders the interactive form with text inputs.
@@ -186,6 +207,9 @@ func (m Model) renderValidationDialog() string {
 		Foreground(colorDanger).
 		Render("Validation Errors")
 
+	contentWidth := dialogContentWidth(m.width)
+	errStyle := lipgloss.NewStyle().Width(contentWidth)
+
 	var errorLines []string
 	if len(m.validationDialog.errors) == 0 {
 		errorLines = append(errorLines, lipgloss.NewStyle().
@@ -193,7 +217,11 @@ func (m Model) renderValidationDialog() string {
 			Render("✓ All checks passed!"))
 	} else {
 		for _, err := range m.validationDialog.errors {
-			errorLines = append(errorLines, "• "+err)
+			// Wrap each error individually: these come from
+			// ValidationError.Error() and can easily run past 60
+			// columns (service name + field + message), which used to
+			// force the dialog wider than the terminal.
+			errorLines = append(errorLines, errStyle.Render("• "+err))
 		}
 	}
 
@@ -216,13 +244,7 @@ func (m Model) renderValidationDialog() string {
 		borderColor = colorSuccess
 	}
 
-	dialog := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Padding(1, 2).
-		Render(content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
+	return renderDialogBox(m.width, m.height, borderColor, content)
 }
 
 func (m Model) renderImportDialog() string {
@@ -250,11 +272,5 @@ func (m Model) renderImportDialog() string {
 		hint,
 	)
 
-	dialog := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorAccent).
-		Padding(1, 2).
-		Render(content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
+	return renderDialogBox(m.width, m.height, colorAccent, content)
 }
