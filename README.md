@@ -9,7 +9,7 @@ then export straight to `docker-compose.yml`.
 Work in progress, built in phases:
 
 - [x] Phase 1 — project setup & domain model (`pkg/composer`)
-- [ ] Phase 2 — base 3-pane UI layout (Lipgloss)
+- [x] Phase 2 — base 3-pane UI layout (Lipgloss)
 - [ ] Phase 3 — state management & navigation
 - [ ] Phase 4 — live preview
 - [ ] Phase 5 — presets & file saving
