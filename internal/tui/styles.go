@@ -30,6 +30,16 @@ var (
 	helpStyle = lipgloss.NewStyle().
 			Foreground(colorSubtle).
 			Padding(0, 1)
+
+	// headerStyle is the full-width branding bar at the very top of the
+	// screen. Previously there was no top-level header at all — only
+	// per-pane titles inside the borders — which made the app start
+	// abruptly at row 0 with no breathing room.
+	headerStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(colorTitle).
+			Background(colorAccent).
+			Padding(0, 2)
 )
 
 // paneStyle returns the border style for a pane depending on whether it

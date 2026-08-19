@@ -13,3 +13,23 @@ func joinHorizontal(left, center, right string) string {
 func lipglossHeight(s string) int {
 	return lipgloss.Height(s)
 }
+
+// truncateText clamps s to at most max visible runes, appending an
+// ellipsis when it had to cut anything. Used anywhere a single line of
+// dynamic content (service names, field values, preset descriptions) is
+// placed inside a fixed-width box: without this, one long value silently
+// grows the rendered line past the pane's border, which is what breaks
+// alignment on resize or with real-world values.
+func truncateText(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	if max == 1 {
+		return string(r[:1])
+	}
+	return string(r[:max-1]) + "…"
+}

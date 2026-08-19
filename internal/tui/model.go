@@ -109,6 +109,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.yamlViewport = viewport.New(rightW, contentHeight)
 			m.viewportReady = true
 		}
+
+		// Keep the editable form's input widths in sync with the current
+		// terminal size. Previously these were computed once in
+		// initFormInputs() and never revisited, so resizing the terminal
+		// while editing left the fields sized for the old width — a
+		// direct cause of the border/content misalignment on resize.
+		if m.currentMode == modeEditField && len(m.formInputs) > 0 {
+			_, centerW, _ := paneWidths(m.width)
+			fieldWidth := centerW - 14 // 12 for label + 2 for spacing
+			if fieldWidth < 20 {
+				fieldWidth = 20
+			}
+			for i := range m.formInputs {
+				m.formInputs[i].Width = fieldWidth
+			}
+		}
+
 		return m, nil
 
 	case tea.KeyMsg:
@@ -402,6 +419,7 @@ func (m Model) View() string {
 	}
 
 	// Normal view rendering
+	header := m.renderHeader()
 	helpBar := m.renderHelpBar()
 
 	// The save/error banner (if shown) adds one extra row above the main
@@ -414,10 +432,8 @@ func (m Model) View() string {
 	}
 
 	// contentHeight is the exact number of rows available to the 3 panes:
-	// total terminal rows, minus the help bar row, minus the banner row
-	// if present. (Previous version subtracted an extra stray "-1" here,
-	// which under-filled the panes by one row on every frame.)
-	contentHeight := m.height - lipglossHeight(helpBar) - bannerLines
+	// total terminal rows, minus the header, help bar, and banner rows.
+	contentHeight := m.height - lipglossHeight(header) - lipglossHeight(helpBar) - bannerLines
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
@@ -429,7 +445,7 @@ func (m Model) View() string {
 	right := m.renderRightPane(rightW, contentHeight)
 
 	body := joinHorizontal(left, center, right)
-	mainView := body + "\n" + helpBar
+	mainView := header + "\n" + body + "\n" + helpBar
 
 	if m.currentMode == modeSaved && m.lastSave.err == nil {
 		banner := lipgloss.NewStyle().
@@ -438,7 +454,7 @@ func (m Model) View() string {
 			Padding(0, 1).
 			Bold(true).
 			Render("✓ Saved " + m.lastSave.filename)
-		mainView = banner + "\n" + mainView
+		mainView = header + "\n" + banner + "\n" + body + "\n" + helpBar
 	} else if m.lastSave.err != nil {
 		banner := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("0")).
@@ -446,10 +462,22 @@ func (m Model) View() string {
 			Padding(0, 1).
 			Bold(true).
 			Render("✗ Error: " + m.lastSave.err.Error())
-		mainView = banner + "\n" + mainView
+		mainView = header + "\n" + banner + "\n" + body + "\n" + helpBar
 	}
 
 	return mainView
+}
+
+// renderHeader renders the full-width branding bar at the top of the
+// screen. Width is clamped to exactly m.width (minus the style's own
+// horizontal padding) so the background color never overshoots or
+// undershoots the terminal on resize.
+func (m Model) renderHeader() string {
+	w := m.width - 4 // headerStyle has Padding(0, 2) => 2 cols each side
+	if w < 1 {
+		w = 1
+	}
+	return headerStyle.Width(w).MaxWidth(m.width).Render("⚓ komposer — Docker Compose Builder")
 }
 
 func (m Model) renderHelpBar() string {
@@ -525,12 +553,15 @@ func (m Model) renderLeftPane(width, height int) string {
 			if i == m.selected {
 				cursor = "> "
 			}
-			body.WriteString(cursor + name + "\n")
+			// Truncate: an untruncated long service name used to grow
+			// this line past `width`, pushing the pane's right border
+			// out of alignment with the other two panes.
+			body.WriteString(cursor + truncateText(name, width-2) + "\n")
 		}
 	}
 
 	content := title + "\n" + body.String()
-	return paneStyle(m.focus == paneLeft).Width(width).Height(height).Render(content)
+	return paneStyle(m.focus == paneLeft).Width(width).MaxWidth(width).Height(height).Render(content)
 }
 
 func (m Model) renderCenterPane(width, height int) string {
@@ -548,7 +579,7 @@ func (m Model) renderCenterPane(width, height int) string {
 		if m.currentMode == modeEditField {
 			body = m.renderEditableForm()
 		} else {
-			body = renderServiceForm(entry)
+			body = renderServiceForm(entry, width)
 			if m.focus == paneCenter {
 				hint := "\n\n" + helpStyle.Render("Press Enter or 'e' to edit")
 				body += hint
@@ -557,7 +588,7 @@ func (m Model) renderCenterPane(width, height int) string {
 	}
 
 	content := title + "\n" + body
-	return paneStyle(m.focus == paneCenter).Width(width).Height(height).Render(content)
+	return paneStyle(m.focus == paneCenter).Width(width).MaxWidth(width).Height(height).Render(content)
 }
 
 func (m Model) renderRightPane(width, height int) string {
@@ -582,12 +613,15 @@ func (m Model) renderRightPane(width, height int) string {
 		content = title + "\n" + body
 	}
 
-	return paneStyle(m.focus == paneRight).Width(width).Height(height).Render(content)
+	return paneStyle(m.focus == paneRight).Width(width).MaxWidth(width).Height(height).Render(content)
 }
 
-// renderServiceForm is a placeholder field dump; Phase 3 replaces this with
-// real bubbles/textinput-backed fields.
-func renderServiceForm(entry composer.ServiceEntry) string {
+// renderServiceForm renders the read-only field summary shown in the
+// center pane outside of edit mode. Every line is truncated to `width`:
+// a long image name, port list, or env var string used to overflow past
+// the pane's border since nothing here previously accounted for the
+// available width at all.
+func renderServiceForm(entry composer.ServiceEntry, width int) string {
 	c := entry.Config
 	lines := []string{
 		"name:        " + entry.Name,
@@ -596,6 +630,9 @@ func renderServiceForm(entry composer.ServiceEntry) string {
 		"ports:       " + strings.Join(c.Ports, ", "),
 		"environment: " + strings.Join(c.Environment, ", "),
 		"volumes:     " + strings.Join(c.Volumes, ", "),
+	}
+	for i, l := range lines {
+		lines[i] = truncateText(l, width)
 	}
 	return strings.Join(lines, "\n")
 }

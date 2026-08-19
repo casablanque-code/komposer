@@ -112,22 +112,32 @@ func (m Model) renderPresetList() string {
 
 	contentWidth := dialogContentWidth(m.width)
 
-	nameStyle := lipgloss.NewStyle().Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(colorSubtle).Width(contentWidth - 2)
-
-	var items []string
+	var rows []string
 	for i, preset := range composer.Presets {
+		selected := i == m.presetPicker.selected
+
 		cursor := "  "
-		if i == m.presetPicker.selected {
-			cursor = "> "
+		nameStyle := lipgloss.NewStyle().Bold(true)
+		descColor := colorSubtle
+		if selected {
+			cursor = "▸ "
+			nameStyle = nameStyle.Foreground(colorAccent)
+			descColor = colorTitle
 		}
-		name := nameStyle.Render(preset.Name)
-		// Description gets its own indented, word-wrapped line instead of
-		// being crammed onto the name's line — a single "Name — long
-		// description" line was routinely 70-90 columns wide and broke
-		// the dialog on any terminal narrower than that.
-		desc := descStyle.Render("  " + preset.Description)
-		items = append(items, cursor+name+"\n"+desc)
+
+		// Every row is exactly two lines: the name, then one
+		// single-line, truncated description. Previously the
+		// description was word-wrapped, which made long presets
+		// (PostgreSQL, MySQL) three lines tall while short ones
+		// (Redis, MongoDB) stayed at two — that mismatch made the
+		// cursor look like it was drifting onto description lines
+		// as you scrolled. Fixed row height removes the ambiguity.
+		nameLine := cursor + nameStyle.Render(preset.Name)
+		descLine := "  " + lipgloss.NewStyle().
+			Foreground(descColor).
+			Render(truncateText(preset.Description, contentWidth-2))
+
+		rows = append(rows, nameLine+"\n"+descLine)
 	}
 
 	hint := lipgloss.NewStyle().
@@ -137,7 +147,7 @@ func (m Model) renderPresetList() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
-		strings.Join(items, "\n\n"),
+		strings.Join(rows, "\n\n"),
 		"",
 		hint,
 	)
