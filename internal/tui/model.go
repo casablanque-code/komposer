@@ -262,19 +262,17 @@ func (m Model) updateEditField(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentMode = modeNormal
 		return m, nil
 
-	case "tab":
+	case "tab", "down":
 		m.nextFormField()
 		return m, nil
 
-	case "shift+tab":
+	case "shift+tab", "up":
 		m.prevFormField()
 		return m, nil
 	}
 
-	// Update the focused input field
 	if len(m.formInputs) > 0 && m.focusedFormField < len(m.formInputs) {
 		m.formInputs[m.focusedFormField], cmd = m.formInputs[m.focusedFormField].Update(msg)
-		// Sync changes to config in real-time for preview
 		m.saveFormToService()
 	}
 
@@ -311,6 +309,17 @@ func (m Model) View() string {
 		return "initializing..."
 	}
 
+	// Render dialogs in full-screen overlay modes
+	switch m.currentMode {
+	case modeAddService:
+		return m.renderAddServiceDialog()
+	case modeConfirmDelete:
+		return m.renderConfirmDeleteDialog()
+	case modePresetPicker:
+		return m.renderPresetPickerDialog()
+	}
+
+	// Normal view rendering
 	helpBar := m.renderHelpBar()
 	contentHeight := m.height - lipglossHeight(helpBar) - 1
 	if contentHeight < 1 {
@@ -324,14 +333,13 @@ func (m Model) View() string {
 	right := m.renderRightPane(rightW, contentHeight)
 
 	body := joinHorizontal(left, center, right)
-
 	mainView := body + "\n" + helpBar
 
 	if m.currentMode == modeSaved && m.lastSave.err == nil {
 		banner := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("0")).
 			Background(colorSuccess).
-			Padding(0, 2).
+			Padding(0, 1).
 			Bold(true).
 			Render("✓ Saved " + m.lastSave.filename)
 		mainView = banner + "\n" + mainView
@@ -339,19 +347,10 @@ func (m Model) View() string {
 		banner := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("0")).
 			Background(colorDanger).
-			Padding(0, 2).
+			Padding(0, 1).
 			Bold(true).
 			Render("✗ Error: " + m.lastSave.err.Error())
 		mainView = banner + "\n" + mainView
-	}
-
-	switch m.currentMode {
-	case modeAddService:
-		return mainView + "\n\n" + m.renderAddServiceDialog()
-	case modeConfirmDelete:
-		return mainView + "\n\n" + m.renderConfirmDeleteDialog()
-	case modePresetPicker:
-		return mainView + "\n\n" + m.renderPresetPickerDialog()
 	}
 
 	return mainView

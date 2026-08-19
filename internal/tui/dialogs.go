@@ -36,13 +36,7 @@ func (m Model) renderAddServiceDialog() string {
 		Width(40).
 		Render(content)
 
-	return lipgloss.Place(
-		m.width,
-		m.height/4,
-		lipgloss.Center,
-		lipgloss.Center,
-		dialog,
-	)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }
 
 // renderConfirmDeleteDialog renders the confirmation dialog for deleting a service.
@@ -73,13 +67,7 @@ func (m Model) renderConfirmDeleteDialog() string {
 		Width(40).
 		Render(content)
 
-	return lipgloss.Place(
-		m.width,
-		m.height/4,
-		lipgloss.Center,
-		lipgloss.Center,
-		dialog,
-	)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }
 
 func (m Model) renderPresetPickerDialog() string {
@@ -120,13 +108,7 @@ func (m Model) renderPresetList() string {
 		Width(70).
 		Render(content)
 
-	return lipgloss.Place(
-		m.width,
-		m.height/2,
-		lipgloss.Center,
-		lipgloss.Center,
-		dialog,
-	)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }
 
 func (m Model) renderPresetNameInput() string {
@@ -161,13 +143,7 @@ func (m Model) renderPresetNameInput() string {
 		Width(50).
 		Render(content)
 
-	return lipgloss.Place(
-		m.width,
-		m.height/3,
-		lipgloss.Center,
-		lipgloss.Center,
-		dialog,
-	)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }
 
 // renderEditableForm renders the interactive form with text inputs.
