@@ -134,12 +134,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
-		case "tab":
-			m.focus = nextPane(m.focus)
+		case "left", "h":
+			m.focus = prevPane(m.focus)
 			return m, nil
 
-		case "shift+tab":
-			m.focus = prevPane(m.focus)
+		case "right", "l":
+			m.focus = nextPane(m.focus)
 			return m, nil
 
 		case "a":
@@ -277,11 +277,11 @@ func (m Model) updateEditField(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentMode = modeNormal
 		return m, nil
 
-	case "tab", "down":
+	case "down":
 		m.nextFormField()
 		return m, nil
 
-	case "shift+tab", "up":
+	case "up":
 		m.prevFormField()
 		return m, nil
 	}
@@ -446,7 +446,7 @@ func (m Model) renderHelpBar() string {
 	case modeConfirmDelete:
 		help = "y: delete • n: cancel"
 	case modeEditField:
-		help = "tab/shift+tab: next/prev field • enter/esc: save & close"
+		help = "↑↓: next/prev field • enter/esc: save & close"
 	case modePresetPicker:
 		if m.presetPicker.stage == 0 {
 			help = "↑↓: navigate • enter: select • esc: cancel"
@@ -459,11 +459,11 @@ func (m Model) renderHelpBar() string {
 		help = "enter: import • esc: cancel"
 	default:
 		if m.focus == paneLeft {
-			help = "↑↓: navigate • a: add • d: delete • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • tab: switch • q: quit"
+			help = "↑↓: navigate • ←→: switch pane • a: add • d: delete • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q: quit"
 		} else if m.focus == paneCenter {
-			help = "enter/e: edit • ctrl+o: import • ctrl+v: validate • ctrl+s: save • tab: switch • q: quit"
+			help = "←→: switch pane • enter: edit • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q: quit"
 		} else {
-			help = "↑↓: scroll • ctrl+o: import • ctrl+v: validate • ctrl+s: save • tab: switch • q: quit"
+			help = "↑↓: scroll • ←→: switch pane • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q: quit"
 		}
 	}
 	return helpStyle.Render(help)
@@ -476,10 +476,15 @@ func (m Model) renderHelpBar() string {
 func paneWidths(total int) (left, center, right int) {
 	const frameOverhead = 4 // border (2) + horizontal padding (2) per pane
 
-	left = int(float64(total)*leftWidthFrac) - frameOverhead
-	center = int(float64(total)*centerWidthFrac) - frameOverhead
-	right = total - left - center - 3*frameOverhead
-	// right absorbs rounding drift so the three panes always sum to `total`
+	// Calculate raw widths
+	leftRaw := int(float64(total) * leftWidthFrac)
+	centerRaw := int(float64(total) * centerWidthFrac)
+	rightRaw := total - leftRaw - centerRaw
+
+	// Subtract frame overhead
+	left = leftRaw - frameOverhead
+	center = centerRaw - frameOverhead
+	right = rightRaw - frameOverhead
 
 	if left < 1 {
 		left = 1

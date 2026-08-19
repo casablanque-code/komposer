@@ -22,18 +22,23 @@ func (m Model) renderAddServiceDialog() string {
 
 	input := m.addDialog.nameInput.View()
 
+	hint := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Render("Enter: confirm • Esc: cancel")
+
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
 		prompt,
 		input,
+		"",
+		hint,
 	)
 
 	dialog := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorAccent).
 		Padding(1, 2).
-		Width(40).
 		Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
@@ -50,7 +55,7 @@ func (m Model) renderConfirmDeleteDialog() string {
 
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
-		Render("Press Y to confirm, N to cancel")
+		Render("Y: confirm • N/Esc: cancel")
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
@@ -64,7 +69,6 @@ func (m Model) renderConfirmDeleteDialog() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorDanger).
 		Padding(1, 2).
-		Width(40).
 		Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
@@ -93,19 +97,22 @@ func (m Model) renderPresetList() string {
 		items = append(items, line)
 	}
 
+	hint := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Render("↑↓: navigate • enter: select • esc: cancel")
+
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
 		strings.Join(items, "\n"),
 		"",
-		lipgloss.NewStyle().Foreground(colorSubtle).Render("↑↓: navigate • enter: select • esc: cancel"),
+		hint,
 	)
 
 	dialog := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorAccent).
 		Padding(1, 2).
-		Width(70).
 		Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
@@ -127,6 +134,10 @@ func (m Model) renderPresetNameInput() string {
 
 	input := m.presetPicker.nameInput.View()
 
+	hint := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Render("Enter: confirm • Esc: back")
+
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
@@ -134,13 +145,14 @@ func (m Model) renderPresetNameInput() string {
 		"",
 		prompt,
 		input,
+		"",
+		hint,
 	)
 
 	dialog := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorAccent).
 		Padding(1, 2).
-		Width(50).
 		Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
@@ -189,7 +201,7 @@ func (m Model) renderValidationDialog() string {
 
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
-		Render("Press ESC to close")
+		Render("Esc: close")
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
@@ -208,7 +220,6 @@ func (m Model) renderValidationDialog() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
 		Padding(1, 2).
-		Width(60).
 		Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
@@ -228,7 +239,7 @@ func (m Model) renderImportDialog() string {
 
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
-		Render("Press Enter to import, ESC to cancel")
+		Render("Enter: import • Esc: cancel")
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
@@ -243,7 +254,6 @@ func (m Model) renderImportDialog() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorAccent).
 		Padding(1, 2).
-		Width(60).
 		Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)

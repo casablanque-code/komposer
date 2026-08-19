@@ -34,8 +34,8 @@ go build -o komposer.exe .
 ## Keybindings
 
 ### Navigation
-- `Tab` / `Shift+Tab` — switch focus between panes
-- `↑` / `↓` or `k` / `j` — navigate services (left pane) or scroll YAML (right pane)
+- `←` / `→` or `h` / `l` — switch focus between panes
+- `↑` / `↓` or `k` / `j` — navigate services (left pane), scroll YAML (right pane), or move between form fields (edit mode)
 - `PgUp` / `PgDown` — scroll YAML preview (right pane)
 
 ### Services
@@ -44,7 +44,7 @@ go build -o komposer.exe .
 - `Enter` or `e` — edit selected service (center pane)
 
 ### Form Editing
-- `Tab` / `Shift+Tab` — next/previous field
+- `↑` / `↓` — next/previous field
 - `Enter` or `Esc` — save and exit edit mode
 
 ### Presets & Saving
