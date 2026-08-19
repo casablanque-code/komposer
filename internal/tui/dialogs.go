@@ -167,3 +167,84 @@ func (m Model) renderEditableForm() string {
 
 	return strings.Join(lines, "\n")
 }
+
+func (m Model) renderValidationDialog() string {
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorDanger).
+		Render("Validation Errors")
+
+	var errorLines []string
+	if len(m.validationDialog.errors) == 0 {
+		errorLines = append(errorLines, lipgloss.NewStyle().
+			Foreground(colorSuccess).
+			Render("✓ All checks passed!"))
+	} else {
+		for _, err := range m.validationDialog.errors {
+			errorLines = append(errorLines, "• "+err)
+		}
+	}
+
+	errorText := strings.Join(errorLines, "\n")
+
+	hint := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Render("Press ESC to close")
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		errorText,
+		"",
+		hint,
+	)
+
+	borderColor := colorDanger
+	if len(m.validationDialog.errors) == 0 {
+		borderColor = colorSuccess
+	}
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(1, 2).
+		Width(60).
+		Render(content)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
+}
+
+func (m Model) renderImportDialog() string {
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorTitle).
+		Render("Import docker-compose.yml")
+
+	prompt := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Render("Enter path to docker-compose.yml:")
+
+	input := m.importDialog.pathInput.View()
+
+	hint := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Render("Press Enter to import, ESC to cancel")
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		prompt,
+		input,
+		"",
+		hint,
+	)
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorAccent).
+		Padding(1, 2).
+		Width(60).
+		Render(content)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
+}

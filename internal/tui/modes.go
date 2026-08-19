@@ -15,6 +15,8 @@ const (
 	modePresetPicker
 	modeSaving
 	modeSaved
+	modeValidation
+	modeImport
 )
 
 // addServiceDialog holds state for the "add service" modal dialog.
@@ -58,4 +60,22 @@ func newPresetPickerDialog() presetPickerDialog {
 type saveResult struct {
 	filename string
 	err      error
+}
+
+type validationDialog struct {
+	errors []string
+	scroll int
+}
+
+type importDialog struct {
+	pathInput textinput.Model
+}
+
+func newImportDialog() importDialog {
+	ti := textinput.New()
+	ti.Placeholder = "docker-compose.yml"
+	ti.Focus()
+	ti.CharLimit = 256
+	ti.Width = 50
+	return importDialog{pathInput: ti}
 }

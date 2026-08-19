@@ -12,7 +12,7 @@ Work in progress, built in phases:
 - [x] Phase 2 — base 3-pane UI layout (Lipgloss)
 - [x] Phase 3 — state management & navigation (add/delete, form editing, scrollable preview)
 - [x] Phase 4 — presets & file saving (PostgreSQL, Redis, Nginx, MySQL, MongoDB)
-- [ ] Phase 5 — validation & import
+- [x] Phase 5 — validation & import
 
 ## Requirements
 
@@ -50,6 +50,10 @@ go build -o komposer.exe .
 ### Presets & Saving
 - `Ctrl+P` — open preset picker (PostgreSQL, Redis, Nginx, MySQL, MongoDB)
 - `Ctrl+S` — save `docker-compose.yml`
+
+### Validation & Import
+- `Ctrl+V` — validate configuration (checks for required fields, valid ports, etc.)
+- `Ctrl+O` — import existing `docker-compose.yml`
 
 ### General
 - `q` / `Ctrl+C` — quit

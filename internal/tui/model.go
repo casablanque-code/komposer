@@ -46,6 +46,8 @@ type Model struct {
 	addDialog        addServiceDialog
 	confirmDelete    confirmDeleteDialog
 	presetPicker     presetPickerDialog
+	validationDialog validationDialog
+	importDialog     importDialog
 
 	// Phase 3: editable form fields for center pane
 	formInputs       []textinput.Model
@@ -120,6 +122,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateEditField(msg)
 		case modePresetPicker:
 			return m.updatePresetPicker(msg)
+		case modeValidation:
+			return m.updateValidation(msg)
+		case modeImport:
+			return m.updateImport(msg)
 		}
 
 		// Normal mode keys
@@ -159,6 +165,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "ctrl+s":
 			return m, m.saveFile()
+
+		case "ctrl+v":
+			m.showValidation()
+			return m, nil
+
+		case "ctrl+o":
+			m.currentMode = modeImport
+			m.importDialog = newImportDialog()
+			return m, nil
 
 		case "e", "enter":
 			if m.focus == paneCenter && len(m.config.Services) > 0 {
@@ -279,6 +294,69 @@ func (m Model) updateEditField(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// updateValidation handles input in the validation dialog.
+func (m Model) updateValidation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "enter":
+		m.currentMode = modeNormal
+		return m, nil
+	}
+	return m, nil
+}
+
+// updateImport handles input in the import dialog.
+func (m Model) updateImport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch msg.String() {
+	case "esc":
+		m.currentMode = modeNormal
+		return m, nil
+
+	case "enter":
+		path := strings.TrimSpace(m.importDialog.pathInput.Value())
+		if path != "" {
+			if err := m.importFile(path); err != nil {
+				m.lastSave = saveResult{filename: path, err: err}
+			} else {
+				m.lastSave = saveResult{filename: path, err: nil}
+				m.selected = 0
+			}
+		}
+		m.currentMode = modeNormal
+		return m, nil
+	}
+
+	m.importDialog.pathInput, cmd = m.importDialog.pathInput.Update(msg)
+	return m, cmd
+}
+
+// showValidation runs validation and displays results in a dialog.
+func (m *Model) showValidation() {
+	result := m.config.Validate()
+
+	var errors []string
+	for _, err := range result.Errors {
+		errors = append(errors, err.Error())
+	}
+
+	m.validationDialog = validationDialog{
+		errors: errors,
+		scroll: 0,
+	}
+	m.currentMode = modeValidation
+}
+
+// importFile loads a docker-compose.yml file into the current config.
+func (m *Model) importFile(path string) error {
+	imported, err := composer.ImportYAML(path)
+	if err != nil {
+		return err
+	}
+	m.config = imported
+	return nil
+}
+
 func nextPane(p pane) pane {
 	switch p {
 	case paneLeft:
@@ -317,6 +395,10 @@ func (m Model) View() string {
 		return m.renderConfirmDeleteDialog()
 	case modePresetPicker:
 		return m.renderPresetPickerDialog()
+	case modeValidation:
+		return m.renderValidationDialog()
+	case modeImport:
+		return m.renderImportDialog()
 	}
 
 	// Normal view rendering
@@ -371,13 +453,17 @@ func (m Model) renderHelpBar() string {
 		} else {
 			help = "enter: confirm • esc: back"
 		}
+	case modeValidation:
+		help = "esc: close"
+	case modeImport:
+		help = "enter: import • esc: cancel"
 	default:
 		if m.focus == paneLeft {
-			help = "↑↓: navigate • a: add • d: delete • ctrl+p: presets • ctrl+s: save • tab: switch • q: quit"
+			help = "↑↓: navigate • a: add • d: delete • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • tab: switch • q: quit"
 		} else if m.focus == paneCenter {
-			help = "enter/e: edit • ctrl+s: save • tab: switch • q: quit"
+			help = "enter/e: edit • ctrl+o: import • ctrl+v: validate • ctrl+s: save • tab: switch • q: quit"
 		} else {
-			help = "↑↓: scroll • ctrl+s: save • tab: switch • q: quit"
+			help = "↑↓: scroll • ctrl+o: import • ctrl+v: validate • ctrl+s: save • tab: switch • q: quit"
 		}
 	}
 	return helpStyle.Render(help)
