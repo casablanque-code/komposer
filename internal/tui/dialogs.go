@@ -219,8 +219,12 @@ func (m Model) renderPresetNameInput() string {
 }
 
 // renderEditableForm renders the interactive form with text inputs.
+// List fields (Ports/Environment/Volumes) render as a multi-line
+// textarea instead of a single-line input — JoinHorizontal(Top, ...)
+// keeps the label aligned to the field's first line rather than
+// vertically centered against its full height.
 func (m Model) renderEditableForm() string {
-	if len(m.formInputs) == 0 {
+	if len(m.formInputs) == 0 && len(m.formAreas) == 0 {
 		return ""
 	}
 
@@ -228,14 +232,25 @@ func (m Model) renderEditableForm() string {
 
 	var lines []string
 	for i, label := range labels {
+		f := formField(i)
 		labelStyle := lipgloss.NewStyle().
 			Foreground(colorSubtle).
 			Width(12).
 			Align(lipgloss.Right)
 
-		line := labelStyle.Render(label) + " " + m.formInputs[i].View()
+		var field string
+		if isListField(f) {
+			field = m.formAreas[i].View()
+		} else {
+			field = m.formInputs[i].View()
+		}
+
+		line := lipgloss.JoinHorizontal(lipgloss.Top, labelStyle.Render(label)+" ", field)
 		lines = append(lines, line)
 	}
+
+	lines = append(lines, "", helpStyle.Render(
+		"Tab/Shift+Tab: switch field • Enter: newline in list fields • Ctrl+S: save • Esc: done"))
 
 	return strings.Join(lines, "\n")
 }

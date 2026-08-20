@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 )
 
@@ -19,18 +20,41 @@ const (
 	numFormFields
 )
 
-// initFormInputs creates a fresh set of textinput models for editing the
-// selected service's configuration.
+// listFieldHeight is how many lines tall each list field (ports/env/
+// volumes) is shown as. The field itself scrolls internally if you add
+// more lines than this.
+const listFieldHeight = 3
+
+// isListField reports whether a field holds a list of values (edited
+// one item per line, via textarea) rather than a single value (edited
+// on one line, via textinput).
+func isListField(f formField) bool {
+	switch f {
+	case fieldPorts, fieldEnvironment, fieldVolumes:
+		return true
+	default:
+		return false
+	}
+}
+
+// initFormInputs creates a fresh set of input models for editing the
+// selected service's configuration. Image/Build/Restart get a
+// single-line textinput; Ports/Environment/Volumes get a multi-line
+// textarea, one list item per line, so you can add and remove entries
+// with Enter instead of editing one long comma-separated string.
 func (m *Model) initFormInputs() {
 	m.formInputs = make([]textinput.Model, numFormFields)
+	m.formAreas = make([]textarea.Model, numFormFields)
 
-	placeholders := []string{
-		"postgres:15",
-		"./path/to/Dockerfile or . for context",
-		"8080:80, 443:443",
-		"KEY=VALUE, DEBUG=true",
-		"./data:/var/lib/data",
-		"unless-stopped",
+	singleLinePlaceholders := map[formField]string{
+		fieldImage:   "postgres:15",
+		fieldBuild:   "./path/to/Dockerfile or . for context",
+		fieldRestart: "unless-stopped",
+	}
+	listPlaceholders := map[formField]string{
+		fieldPorts:       "8080:80",
+		fieldEnvironment: "KEY=VALUE",
+		fieldVolumes:     "./data:/var/lib/data",
 	}
 
 	// Calculate available width for form fields (center pane width - label width - padding)
@@ -40,11 +64,22 @@ func (m *Model) initFormInputs() {
 		fieldWidth = 20
 	}
 
-	for i := range m.formInputs {
-		ti := textinput.New()
-		ti.Placeholder = placeholders[i]
-		ti.Width = fieldWidth
-		m.formInputs[i] = ti
+	for i := formField(0); i < numFormFields; i++ {
+		if isListField(i) {
+			ta := textarea.New()
+			ta.Placeholder = listPlaceholders[i] + " (one per line)"
+			ta.ShowLineNumbers = false
+			ta.Prompt = "" // no left-margin glyph — keep width math exact
+			ta.CharLimit = 0
+			ta.SetWidth(fieldWidth)
+			ta.SetHeight(listFieldHeight)
+			m.formAreas[i] = ta
+		} else {
+			ti := textinput.New()
+			ti.Placeholder = singleLinePlaceholders[i]
+			ti.Width = fieldWidth
+			m.formInputs[i] = ti
+		}
 	}
 
 	// Load current service values into inputs if a service is selected
@@ -54,21 +89,20 @@ func (m *Model) initFormInputs() {
 
 		m.formInputs[fieldImage].SetValue(c.Image)
 		m.formInputs[fieldBuild].SetValue(c.Build)
-		m.formInputs[fieldPorts].SetValue(strings.Join(c.Ports, ", "))
-		m.formInputs[fieldEnvironment].SetValue(strings.Join(c.Environment, ", "))
-		m.formInputs[fieldVolumes].SetValue(strings.Join(c.Volumes, ", "))
 		m.formInputs[fieldRestart].SetValue(c.Restart)
+
+		m.formAreas[fieldPorts].SetValue(strings.Join(c.Ports, "\n"))
+		m.formAreas[fieldEnvironment].SetValue(strings.Join(c.Environment, "\n"))
+		m.formAreas[fieldVolumes].SetValue(strings.Join(c.Volumes, "\n"))
 	}
 
 	// Focus first field when entering edit mode
-	if len(m.formInputs) > 0 {
-		m.formInputs[0].Focus()
-		m.focusedFormField = 0
-	}
+	m.focusedFormField = 0
+	m.formInputs[fieldImage].Focus()
 }
 
-// saveFormToService applies the values from formInputs back to the currently
-// selected service's configuration.
+// saveFormToService applies the values from the form fields back to the
+// currently selected service's configuration.
 func (m *Model) saveFormToService() {
 	if len(m.config.Services) == 0 || m.selected >= len(m.config.Services) {
 		return
@@ -78,12 +112,11 @@ func (m *Model) saveFormToService() {
 
 	c.Image = strings.TrimSpace(m.formInputs[fieldImage].Value())
 	c.Build = strings.TrimSpace(m.formInputs[fieldBuild].Value())
-
-	c.Ports = splitTrim(m.formInputs[fieldPorts].Value(), ",")
-	c.Environment = splitTrim(m.formInputs[fieldEnvironment].Value(), ",")
-	c.Volumes = splitTrim(m.formInputs[fieldVolumes].Value(), ",")
-
 	c.Restart = strings.TrimSpace(m.formInputs[fieldRestart].Value())
+
+	c.Ports = splitLines(m.formAreas[fieldPorts].Value())
+	c.Environment = splitLines(m.formAreas[fieldEnvironment].Value())
+	c.Volumes = splitLines(m.formAreas[fieldVolumes].Value())
 }
 
 // splitTrim splits a comma-separated string and trims whitespace from each part,
@@ -102,22 +135,40 @@ func splitTrim(s, sep string) []string {
 	return result
 }
 
+// splitLines splits a newline-separated string (as produced by a
+// textarea list field) into trimmed, non-empty items — the equivalent
+// of splitTrim for fields that are now edited one item per line
+// instead of comma-separated on one line.
+func splitLines(s string) []string {
+	return splitTrim(s, "\n")
+}
+
 // nextFormField moves focus to the next field in the form, wrapping around.
 func (m *Model) nextFormField() {
-	if len(m.formInputs) == 0 {
-		return
-	}
-	m.formInputs[m.focusedFormField].Blur()
-	m.focusedFormField = (m.focusedFormField + 1) % len(m.formInputs)
-	m.formInputs[m.focusedFormField].Focus()
+	blurField(m, formField(m.focusedFormField))
+	m.focusedFormField = int((formField(m.focusedFormField) + 1) % numFormFields)
+	focusField(m, formField(m.focusedFormField))
 }
 
 // prevFormField moves focus to the previous field in the form, wrapping around.
 func (m *Model) prevFormField() {
-	if len(m.formInputs) == 0 {
-		return
+	blurField(m, formField(m.focusedFormField))
+	m.focusedFormField = int((formField(m.focusedFormField) - 1 + numFormFields) % numFormFields)
+	focusField(m, formField(m.focusedFormField))
+}
+
+func blurField(m *Model, f formField) {
+	if isListField(f) {
+		m.formAreas[f].Blur()
+	} else {
+		m.formInputs[f].Blur()
 	}
-	m.formInputs[m.focusedFormField].Blur()
-	m.focusedFormField = (m.focusedFormField - 1 + len(m.formInputs)) % len(m.formInputs)
-	m.formInputs[m.focusedFormField].Focus()
+}
+
+func focusField(m *Model, f formField) {
+	if isListField(f) {
+		m.formAreas[f].Focus()
+	} else {
+		m.formInputs[f].Focus()
+	}
 }

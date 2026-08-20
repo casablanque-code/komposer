@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
@@ -49,8 +50,15 @@ type Model struct {
 	validationDialog validationDialog
 	importDialog     importDialog
 
-	// Phase 3: editable form fields for center pane
+	// Phase 3: editable form fields for center pane.
+	// Image/Build/Restart are single-line values, so they stay as
+	// textinput. Ports/Environment/Volumes are lists, so they're edited
+	// as textarea (one item per line) — see isListField in form.go.
+	// Both slices are always len(numFormFields); only the entries that
+	// match a field's kind are actually used, so index i in either
+	// slice always corresponds to formField(i).
 	formInputs       []textinput.Model
+	formAreas        []textarea.Model
 	focusedFormField int
 
 	// Phase 3: scrollable YAML preview
@@ -136,6 +144,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			for i := range m.formInputs {
 				m.formInputs[i].Width = fieldWidth
+			}
+			for i := range m.formAreas {
+				m.formAreas[i].SetWidth(fieldWidth)
 			}
 		}
 
@@ -293,6 +304,20 @@ func (m Model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // updateEditField handles input in the form edit mode.
+//
+// Enter used to save the whole form and exit edit mode — there was no
+// way to type a newline, so list fields (ports/environment/volumes)
+// could only ever be one comma-separated line. Now:
+//   - Esc saves and exits, same as before.
+//   - Ctrl+S saves (both to the in-memory service and to disk) without
+//     leaving edit mode, so you can keep working.
+//   - Enter is forwarded to the focused field: on a list field
+//     (textarea) that inserts a newline, so you can add rows; on a
+//     single-line field (textinput) it's a no-op, same as it always
+//     was for those.
+//   - Field navigation moved from Up/Down to Tab/Shift+Tab, because
+//     Up/Down are now needed inside the list fields to move the cursor
+//     between the lines you've typed.
 func (m Model) updateEditField(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
@@ -302,22 +327,27 @@ func (m Model) updateEditField(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentMode = modeNormal
 		return m, nil
 
-	case "enter":
+	case "ctrl+s":
 		m.saveFormToService()
-		m.currentMode = modeNormal
-		return m, nil
+		return m, m.saveFile()
 
-	case "down":
+	case "tab":
 		m.nextFormField()
 		return m, nil
 
-	case "up":
+	case "shift+tab":
 		m.prevFormField()
 		return m, nil
 	}
 
-	if len(m.formInputs) > 0 && m.focusedFormField < len(m.formInputs) {
-		m.formInputs[m.focusedFormField], cmd = m.formInputs[m.focusedFormField].Update(msg)
+	f := formField(m.focusedFormField)
+	if isListField(f) {
+		if int(f) < len(m.formAreas) {
+			m.formAreas[f], cmd = m.formAreas[f].Update(msg)
+			m.saveFormToService()
+		}
+	} else if int(f) < len(m.formInputs) {
+		m.formInputs[f], cmd = m.formInputs[f].Update(msg)
 		m.saveFormToService()
 	}
 
@@ -647,10 +677,14 @@ func (m Model) renderRightPane(width, height int) string {
 }
 
 // renderServiceForm renders the read-only field summary shown in the
-// center pane outside of edit mode. Every line is truncated to `width`:
-// a long image name, port list, or env var string used to overflow past
-// the pane's border since nothing here previously accounted for the
-// available width at all.
+// center pane outside of edit mode. Every line is wrapped to `width`
+// instead of truncated: a long image name, port list, or env var string
+// used to get cut off with "…" the moment the terminal got narrow, which
+// silently hid part of the actual config. lipgloss wraps automatically
+// when Width is set and content is longer than that, without dropping
+// anything — it just uses more vertical space, which the pane's fixed
+// Height() below will clip if it truly doesn't fit, but nothing is
+// hidden behind an ellipsis anymore.
 func renderServiceForm(entry composer.ServiceEntry, width int) string {
 	c := entry.Config
 	lines := []string{
@@ -661,8 +695,9 @@ func renderServiceForm(entry composer.ServiceEntry, width int) string {
 		"environment: " + strings.Join(c.Environment, ", "),
 		"volumes:     " + strings.Join(c.Volumes, ", "),
 	}
+	wrapStyle := lipgloss.NewStyle().Width(width)
 	for i, l := range lines {
-		lines[i] = truncateText(l, width)
+		lines[i] = wrapStyle.Render(l)
 	}
 	return strings.Join(lines, "\n")
 }
