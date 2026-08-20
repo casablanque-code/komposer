@@ -13,8 +13,8 @@ import (
 // All text inside dialogs MUST be rendered at this width.
 func dialogContentWidth(termWidth int) int {
 	const preferred = 60
-	const padding = 4  // 2 chars padding on each side
-	const border = 2   // 1 char border on each side
+	const padding = 4 // 2 chars padding on each side
+	const border = 2  // 1 char border on each side
 
 	maxContent := termWidth - padding - border
 	if maxContent < 20 {
@@ -260,26 +260,53 @@ func (m Model) renderValidationDialog() string {
 
 	title := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(colorDanger).
+		Foreground(colorTitle).
 		Width(w).
-		Render("Validation Errors")
+		Render("Validation")
 
-	var errorLines []string
-	if len(m.validationDialog.errors) == 0 {
-		errorLines = append(errorLines, lipgloss.NewStyle().
+	var sections []string
+
+	if len(m.validationDialog.errors) == 0 && len(m.validationDialog.warnings) == 0 {
+		sections = append(sections, lipgloss.NewStyle().
 			Foreground(colorSuccess).
 			Width(w).
 			Render("✓ All checks passed!"))
-	} else {
+	}
+
+	if len(m.validationDialog.errors) > 0 {
+		errHeader := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(colorDanger).
+			Width(w).
+			Render(fmt.Sprintf("Errors (%d) — must fix before this is valid compose:", len(m.validationDialog.errors)))
+		sections = append(sections, errHeader)
 		for _, err := range m.validationDialog.errors {
-			wrapped := lipgloss.NewStyle().
+			sections = append(sections, lipgloss.NewStyle().
+				Foreground(colorDanger).
 				Width(w).
-				Render("• " + err)
-			errorLines = append(errorLines, wrapped)
+				Render("• "+err))
 		}
 	}
 
-	errorText := strings.Join(errorLines, "\n")
+	if len(m.validationDialog.warnings) > 0 {
+		if len(sections) > 0 {
+			sections = append(sections, "")
+		}
+		warnHeader := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(colorWarning).
+			Width(w).
+			Render(fmt.Sprintf("Warnings (%d) — valid, but worth a look:", len(m.validationDialog.warnings)))
+		sections = append(sections, warnHeader)
+		for _, warning := range m.validationDialog.warnings {
+			sections = append(sections, lipgloss.NewStyle().
+				Foreground(colorWarning).
+				Width(w).
+				Render("• "+warning))
+		}
+	}
+
+	body := strings.Join(sections, "\n")
 
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
@@ -289,14 +316,17 @@ func (m Model) renderValidationDialog() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
-		errorText,
+		body,
 		"",
 		hint,
 	)
 
-	borderColor := colorDanger
-	if len(m.validationDialog.errors) == 0 {
-		borderColor = colorSuccess
+	borderColor := colorSuccess
+	switch {
+	case len(m.validationDialog.errors) > 0:
+		borderColor = colorDanger
+	case len(m.validationDialog.warnings) > 0:
+		borderColor = colorWarning
 	}
 
 	return renderDialogBox(m.width, m.height, borderColor, content)

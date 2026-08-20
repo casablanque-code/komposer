@@ -63,8 +63,9 @@ type saveResult struct {
 }
 
 type validationDialog struct {
-	errors []string
-	scroll int
+	errors   []string
+	warnings []string
+	scroll   int
 }
 
 type importDialog struct {

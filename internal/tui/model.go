@@ -10,8 +10,8 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/casablanque-code/komposer/pkg/composer"
 )
@@ -62,7 +62,7 @@ type Model struct {
 	focusedFormField int
 
 	// Phase 3: scrollable YAML preview
-	yamlViewport viewport.Model
+	yamlViewport  viewport.Model
 	viewportReady bool
 
 	// Phase 4: save state
@@ -118,7 +118,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the direct cause of the right border "disappearing" and the
 		// `|` characters drifting on resize.
 		_, _, rightW := paneWidths(m.width)
-		headerHeight := lipglossHeight(paneTitleStyle.Render("Preview: docker-compose.yml")) + 2
+		headerHeight := lipglossHeight(paneTitleStyle.Render("Preview: docker-compose.yml")) + 3
 		viewportContentHeight := m.height - headerHeight - 2
 		if viewportContentHeight < 1 {
 			viewportContentHeight = 1
@@ -400,9 +400,15 @@ func (m *Model) showValidation() {
 		errors = append(errors, err.Error())
 	}
 
+	var warnings []string
+	for _, w := range result.Warnings {
+		warnings = append(warnings, w.Error())
+	}
+
 	m.validationDialog = validationDialog{
-		errors: errors,
-		scroll: 0,
+		errors:   errors,
+		warnings: warnings,
+		scroll:   0,
 	}
 	m.currentMode = modeValidation
 }
@@ -583,9 +589,19 @@ func paneWidths(total int) (left, center, right int) {
 	return left, center, right
 }
 
-func (m Model) renderLeftPane(width, height int) string {
-	title := paneTitleStyle.Render("Services")
+// paneHeader renders a pane's title followed by a full-width divider
+// line, visually separating the title from the body like a table
+// header row. All three panes go through this so the title is always
+// the first line of pane content and never gets mistaken for part of
+// the scrollable body.
+func paneHeader(title string, width int) string {
+	divider := lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Render(strings.Repeat("─", width))
+	return paneTitleStyle.Render(title) + "\n" + divider
+}
 
+func (m Model) renderLeftPane(width, height int) string {
 	var body strings.Builder
 	names := m.config.ServiceNames()
 	if len(names) == 0 {
@@ -600,24 +616,35 @@ func (m Model) renderLeftPane(width, height int) string {
 		}
 	}
 
-	content := title + "\n" + body.String()
+	content := paneHeader("Services", width) + "\n" + body.String()
 
-	// MaxWidth is a deliberate second line of defense on top of
-	// truncateText above, not a replacement for it: truncateText keeps
-	// content from overflowing in the first place (correct, ANSI-safe),
-	// MaxWidth is a hard backstop in case something new is added later
-	// and forgets to truncate. Together they don't conflict — Width sets
-	// the box's target size, MaxWidth caps it if content still overflows.
+	// MaxWidth/MaxHeight are a deliberate second line of defense on top
+	// of truncateText and paneHeader above, not a replacement for them:
+	// those keep content from overflowing in the first place (correct,
+	// ANSI-safe), Max* are a hard backstop in case something new is
+	// added later and forgets to size itself correctly. Together they
+	// don't conflict — Width/Height set the box's target size, Max*
+	// caps it if content still overflows.
+	//
+	// MaxHeight specifically fixes titles disappearing on resize: Height()
+	// alone in lipgloss only pads content that's SHORTER than it — it
+	// never clips content that's TALLER. Once a service list (or a form,
+	// or the YAML preview) grew past the pane's allotted rows, the pane
+	// simply rendered taller than the terminal, and since the title is
+	// the *first* line of that now-too-tall block, it's the title that
+	// scrolled off the top and out of view — not the overflowing content
+	// at the bottom, which stayed on screen. MaxHeight makes the box a
+	// hard ceiling, so the title row is always preserved and only the
+	// tail of long content is ever clipped.
 	return paneStyle(m.focus == paneLeft).
 		Width(width).
 		MaxWidth(width + 4).
 		Height(height).
+		MaxHeight(height + 4).
 		Render(content)
 }
 
 func (m Model) renderCenterPane(width, height int) string {
-	title := paneTitleStyle.Render("Service Config")
-
 	var body string
 	if len(m.config.Services) == 0 {
 		hint := "No services yet. Switch to the left pane and press 'a' to add one."
@@ -638,18 +665,17 @@ func (m Model) renderCenterPane(width, height int) string {
 		}
 	}
 
-	content := title + "\n" + body
+	content := paneHeader("Service Config", width) + "\n" + body
 
 	return paneStyle(m.focus == paneCenter).
 		Width(width).
 		MaxWidth(width + 4).
 		Height(height).
+		MaxHeight(height + 4).
 		Render(content)
 }
 
 func (m Model) renderRightPane(width, height int) string {
-	title := paneTitleStyle.Render("Preview: docker-compose.yml")
-
 	yamlBytes, err := m.config.ExportYAML()
 	body := string(yamlBytes)
 	if err != nil {
@@ -659,20 +685,23 @@ func (m Model) renderRightPane(width, height int) string {
 		body = helpStyle.Render("(empty — add a service to see YAML)")
 	}
 
+	header := paneHeader("Preview: docker-compose.yml", width)
+
 	// Use viewport for scrollable content when ready
 	var content string
 	if m.viewportReady {
 		m.yamlViewport.SetContent(body)
 		viewportContent := m.yamlViewport.View()
-		content = title + "\n" + viewportContent
+		content = header + "\n" + viewportContent
 	} else {
-		content = title + "\n" + body
+		content = header + "\n" + body
 	}
 
 	return paneStyle(m.focus == paneRight).
 		Width(width).
 		MaxWidth(width + 4).
 		Height(height).
+		MaxHeight(height + 4).
 		Render(content)
 }
 

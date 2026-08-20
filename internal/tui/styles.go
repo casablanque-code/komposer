@@ -5,12 +5,13 @@ import "github.com/charmbracelet/lipgloss"
 // Color palette. Kept centralized so later phases (presets modal, banners)
 // can reuse the same accents instead of hardcoding hex values.
 var (
-	colorAccent    = lipgloss.Color("62")  // focused pane border / highlights
-	colorMuted     = lipgloss.Color("240") // unfocused pane border
-	colorSubtle    = lipgloss.Color("246") // secondary text
-	colorTitle     = lipgloss.Color("230") // pane titles
-	colorSuccess   = lipgloss.Color("42")  // save banner
-	colorDanger    = lipgloss.Color("204") // delete/error banner
+	colorAccent  = lipgloss.Color("62")  // focused pane border / highlights
+	colorMuted   = lipgloss.Color("240") // unfocused pane border
+	colorSubtle  = lipgloss.Color("246") // secondary text
+	colorTitle   = lipgloss.Color("230") // pane titles
+	colorSuccess = lipgloss.Color("42")  // save banner
+	colorWarning = lipgloss.Color("214") // non-blocking validation warnings
+	colorDanger  = lipgloss.Color("204") // delete/error banner
 )
 
 var (

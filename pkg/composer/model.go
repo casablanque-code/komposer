@@ -29,14 +29,22 @@ type ServiceEntry struct {
 
 // ServiceConfig holds configuration for an individual container/service.
 type ServiceConfig struct {
-	Image       string                   `yaml:"image,omitempty"`
-	Build       string                   `yaml:"build,omitempty"`
-	Ports       []string                 `yaml:"ports,omitempty"`
-	Environment []string                 `yaml:"environment,omitempty"`
-	Volumes     []string                 `yaml:"volumes,omitempty"`
-	DependsOn   []DependsOnEntry         `yaml:"-"`
-	HealthCheck *HealthCheck             `yaml:"healthcheck,omitempty"`
-	Restart     string                   `yaml:"restart,omitempty"`
+	Image       string           `yaml:"image,omitempty"`
+	Build       string           `yaml:"build,omitempty"`
+	Ports       []string         `yaml:"ports,omitempty"`
+	Environment []string         `yaml:"environment,omitempty"`
+	Volumes     []string         `yaml:"volumes,omitempty"`
+	DependsOn   []DependsOnEntry `yaml:"-"`
+	HealthCheck *HealthCheck     `yaml:"healthcheck,omitempty"`
+	Restart     string           `yaml:"restart,omitempty"`
+	// User and Privileged aren't editable from the TUI form yet, but
+	// they still need to round-trip: without a struct field for them,
+	// ImportYAML silently drops `user:`/`privileged:` from any file
+	// that had them, and the validator has nothing to warn about. Kept
+	// even though there's no form field so an imported file that sets
+	// these doesn't lose them on the next export.
+	User       string `yaml:"user,omitempty"`
+	Privileged bool   `yaml:"privileged,omitempty"`
 }
 
 // DependsOnEntry pairs a dependency's service name with its wait condition,
@@ -50,8 +58,8 @@ type DependsOnEntry struct {
 type DependsOnCond string
 
 const (
-	CondServiceStarted            DependsOnCond = "service_started"
-	CondServiceHealthy            DependsOnCond = "service_healthy"
+	CondServiceStarted               DependsOnCond = "service_started"
+	CondServiceHealthy               DependsOnCond = "service_healthy"
 	CondServiceCompletedSuccessfully DependsOnCond = "service_completed_successfully"
 )
 
