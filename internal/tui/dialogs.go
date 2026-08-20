@@ -9,30 +9,29 @@ import (
 	"github.com/casablanque-code/komposer/pkg/composer"
 )
 
-// dialogContentWidth returns a safe content width for modal dialogs: wide
-// enough to be readable, but never wider than the terminal can actually
-// show. Every dialog's wrappable text should be rendered at this width
-// before being boxed, so long strings (preset descriptions, validation
-// messages) wrap instead of forcing the dialog wider than the screen —
-// lipgloss.Place() does not shrink oversized content, it just breaks.
+// dialogContentWidth returns the exact width for dialog content.
+// All text inside dialogs MUST be rendered at this width.
 func dialogContentWidth(termWidth int) int {
-	const preferred = 56  // comfortable reading width
-	const margin = 6      // border(2) + padding(4) the dialog box adds
+	const preferred = 60
+	const padding = 4  // 2 chars padding on each side
+	const border = 2   // 1 char border on each side
 
-	max := termWidth - margin
-	if max < 20 {
-		max = 20 // absolute floor so tiny terminals don't collapse to 0
+	maxContent := termWidth - padding - border
+	if maxContent < 20 {
+		return 20
 	}
-	if preferred < max {
+	if preferred < maxContent {
 		return preferred
 	}
-	return max
+	return maxContent
 }
 
 // renderDialogBox wraps already-built content in the standard bordered
-// dialog chrome and centers it on screen, clamping its total width so it
-// can never exceed the terminal (the previous overflow was the root cause
-// of the preset picker "falling apart" on narrower terminals).
+// dialog chrome and centers it on screen. MaxWidth is a hard backstop:
+// every line of content should already be built at dialogContentWidth,
+// but if any line slips through wider than that (e.g. a value that
+// wasn't truncated), this keeps the box from being rendered wider than
+// the terminal, which is what tears the border apart on narrow widths.
 func renderDialogBox(termWidth, termHeight int, borderColor lipgloss.Color, content string) string {
 	dialog := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -46,19 +45,24 @@ func renderDialogBox(termWidth, termHeight int, borderColor lipgloss.Color, cont
 
 // renderAddServiceDialog renders the modal dialog for adding a new service.
 func (m Model) renderAddServiceDialog() string {
+	w := dialogContentWidth(m.width)
+
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorTitle).
+		Width(w).
 		Render("Add New Service")
 
 	prompt := lipgloss.NewStyle().
 		Foreground(colorSubtle).
+		Width(w).
 		Render("Enter service name:")
 
 	input := m.addDialog.nameInput.View()
 
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
+		Width(w).
 		Render("Enter: confirm • Esc: cancel")
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
@@ -75,15 +79,21 @@ func (m Model) renderAddServiceDialog() string {
 
 // renderConfirmDeleteDialog renders the confirmation dialog for deleting a service.
 func (m Model) renderConfirmDeleteDialog() string {
+	w := dialogContentWidth(m.width)
+
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorDanger).
+		Width(w).
 		Render("Confirm Delete")
 
-	prompt := fmt.Sprintf("Delete service '%s'?", m.confirmDelete.serviceName)
+	prompt := lipgloss.NewStyle().
+		Width(w).
+		Render(fmt.Sprintf("Delete service '%s'?", m.confirmDelete.serviceName))
 
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
+		Width(w).
 		Render("Y: confirm • N/Esc: cancel")
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
@@ -105,49 +115,62 @@ func (m Model) renderPresetPickerDialog() string {
 }
 
 func (m Model) renderPresetList() string {
+	w := dialogContentWidth(m.width)
+
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorTitle).
+		Width(w).
 		Render("Choose Preset")
-
-	contentWidth := dialogContentWidth(m.width)
 
 	var rows []string
 	for i, preset := range composer.Presets {
 		selected := i == m.presetPicker.selected
 
+		// Simple, clean rendering without extra complexity
 		cursor := "  "
-		nameStyle := lipgloss.NewStyle().Bold(true)
-		descColor := colorSubtle
 		if selected {
 			cursor = "▸ "
-			nameStyle = nameStyle.Foreground(colorAccent)
-			descColor = colorTitle
 		}
 
-		// Every row is exactly two lines: the name, then one
-		// single-line, truncated description. Previously the
-		// description was word-wrapped, which made long presets
-		// (PostgreSQL, MySQL) three lines tall while short ones
-		// (Redis, MongoDB) stayed at two — that mismatch made the
-		// cursor look like it was drifting onto description lines
-		// as you scrolled. Fixed row height removes the ambiguity.
-		nameLine := cursor + nameStyle.Render(preset.Name)
-		descLine := "  " + lipgloss.NewStyle().
-			Foreground(descColor).
-			Render(truncateText(preset.Description, contentWidth-2))
+		// Name line
+		nameStyle := lipgloss.NewStyle()
+		if selected {
+			nameStyle = nameStyle.Foreground(colorAccent).Bold(true)
+		} else {
+			nameStyle = nameStyle.Bold(true)
+		}
 
+		// Truncate the name too, not just the description — this line
+		// previously had no width cap at all, so it was the one piece of
+		// content in the whole app that could grow past the dialog's
+		// width with nothing to stop it.
+		nameLine := cursor + nameStyle.Render(truncateText(preset.Name, w-4))
+
+		// Description line
+		descStyle := lipgloss.NewStyle()
+		if selected {
+			descStyle = descStyle.Foreground(colorTitle)
+		} else {
+			descStyle = descStyle.Foreground(colorSubtle)
+		}
+
+		descText := truncateText(preset.Description, w-4)
+		descLine := "  " + descStyle.Render(descText)
+
+		// Add to rows as single block
 		rows = append(rows, nameLine+"\n"+descLine)
 	}
 
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
+		Width(w).
 		Render("↑↓: navigate • enter: select • esc: cancel")
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
-		strings.Join(rows, "\n\n"),
+		strings.Join(rows, "\n"),
 		"",
 		hint,
 	)
@@ -156,23 +179,29 @@ func (m Model) renderPresetList() string {
 }
 
 func (m Model) renderPresetNameInput() string {
+	w := dialogContentWidth(m.width)
 	preset := composer.Presets[m.presetPicker.chosenPreset]
 
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorTitle).
+		Width(w).
 		Render("Name Your Service")
 
 	presetInfo := lipgloss.NewStyle().
 		Foreground(colorSubtle).
+		Width(w).
 		Render(fmt.Sprintf("Preset: %s", preset.Name))
 
-	prompt := "Service name:"
+	prompt := lipgloss.NewStyle().
+		Width(w).
+		Render("Service name:")
 
 	input := m.presetPicker.nameInput.View()
 
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
+		Width(w).
 		Render("Enter: confirm • Esc: back")
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
@@ -212,26 +241,26 @@ func (m Model) renderEditableForm() string {
 }
 
 func (m Model) renderValidationDialog() string {
+	w := dialogContentWidth(m.width)
+
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorDanger).
+		Width(w).
 		Render("Validation Errors")
-
-	contentWidth := dialogContentWidth(m.width)
-	errStyle := lipgloss.NewStyle().Width(contentWidth)
 
 	var errorLines []string
 	if len(m.validationDialog.errors) == 0 {
 		errorLines = append(errorLines, lipgloss.NewStyle().
 			Foreground(colorSuccess).
+			Width(w).
 			Render("✓ All checks passed!"))
 	} else {
 		for _, err := range m.validationDialog.errors {
-			// Wrap each error individually: these come from
-			// ValidationError.Error() and can easily run past 60
-			// columns (service name + field + message), which used to
-			// force the dialog wider than the terminal.
-			errorLines = append(errorLines, errStyle.Render("• "+err))
+			wrapped := lipgloss.NewStyle().
+				Width(w).
+				Render("• " + err)
+			errorLines = append(errorLines, wrapped)
 		}
 	}
 
@@ -239,6 +268,7 @@ func (m Model) renderValidationDialog() string {
 
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
+		Width(w).
 		Render("Esc: close")
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
@@ -258,19 +288,24 @@ func (m Model) renderValidationDialog() string {
 }
 
 func (m Model) renderImportDialog() string {
+	w := dialogContentWidth(m.width)
+
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorTitle).
+		Width(w).
 		Render("Import docker-compose.yml")
 
 	prompt := lipgloss.NewStyle().
 		Foreground(colorSubtle).
+		Width(w).
 		Render("Enter path to docker-compose.yml:")
 
 	input := m.importDialog.pathInput.View()
 
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
+		Width(w).
 		Render("Enter: import • Esc: cancel")
 
 	content := lipgloss.JoinVertical(lipgloss.Left,

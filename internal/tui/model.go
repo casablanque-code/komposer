@@ -98,16 +98,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		// Initialize viewport for YAML preview on first WindowSizeMsg
+		// Keep the YAML preview viewport's internal width/height in sync
+		// with the current terminal size on EVERY WindowSizeMsg, not just
+		// the first. Previously this block was gated behind
+		// `if !m.viewportReady`, so after the initial resize the
+		// viewport's content kept rendering at its original width/height
+		// forever. When the terminal was later shrunk, the pane's border
+		// (recomputed correctly via paneWidths) became narrower than the
+		// viewport's stale, wider content — the content spilled past the
+		// right border instead of being clipped/rewrapped to it. That's
+		// the direct cause of the right border "disappearing" and the
+		// `|` characters drifting on resize.
+		_, _, rightW := paneWidths(m.width)
+		headerHeight := lipglossHeight(paneTitleStyle.Render("Preview: docker-compose.yml")) + 2
+		viewportContentHeight := m.height - headerHeight - 2
+		if viewportContentHeight < 1 {
+			viewportContentHeight = 1
+		}
 		if !m.viewportReady {
-			_, _, rightW := paneWidths(m.width)
-			headerHeight := lipglossHeight(paneTitleStyle.Render("Preview: docker-compose.yml")) + 2
-			contentHeight := m.height - headerHeight - 2
-			if contentHeight < 1 {
-				contentHeight = 1
-			}
-			m.yamlViewport = viewport.New(rightW, contentHeight)
+			m.yamlViewport = viewport.New(rightW, viewportContentHeight)
 			m.viewportReady = true
+		} else {
+			m.yamlViewport.Width = rightW
+			m.yamlViewport.Height = viewportContentHeight
 		}
 
 		// Keep the editable form's input widths in sync with the current
@@ -553,15 +566,23 @@ func (m Model) renderLeftPane(width, height int) string {
 			if i == m.selected {
 				cursor = "> "
 			}
-			// Truncate: an untruncated long service name used to grow
-			// this line past `width`, pushing the pane's right border
-			// out of alignment with the other two panes.
 			body.WriteString(cursor + truncateText(name, width-2) + "\n")
 		}
 	}
 
 	content := title + "\n" + body.String()
-	return paneStyle(m.focus == paneLeft).Width(width).MaxWidth(width).Height(height).Render(content)
+
+	// MaxWidth is a deliberate second line of defense on top of
+	// truncateText above, not a replacement for it: truncateText keeps
+	// content from overflowing in the first place (correct, ANSI-safe),
+	// MaxWidth is a hard backstop in case something new is added later
+	// and forgets to truncate. Together they don't conflict — Width sets
+	// the box's target size, MaxWidth caps it if content still overflows.
+	return paneStyle(m.focus == paneLeft).
+		Width(width).
+		MaxWidth(width + 4).
+		Height(height).
+		Render(content)
 }
 
 func (m Model) renderCenterPane(width, height int) string {
@@ -588,7 +609,12 @@ func (m Model) renderCenterPane(width, height int) string {
 	}
 
 	content := title + "\n" + body
-	return paneStyle(m.focus == paneCenter).Width(width).MaxWidth(width).Height(height).Render(content)
+
+	return paneStyle(m.focus == paneCenter).
+		Width(width).
+		MaxWidth(width + 4).
+		Height(height).
+		Render(content)
 }
 
 func (m Model) renderRightPane(width, height int) string {
@@ -613,7 +639,11 @@ func (m Model) renderRightPane(width, height int) string {
 		content = title + "\n" + body
 	}
 
-	return paneStyle(m.focus == paneRight).Width(width).MaxWidth(width).Height(height).Render(content)
+	return paneStyle(m.focus == paneRight).
+		Width(width).
+		MaxWidth(width + 4).
+		Height(height).
+		Render(content)
 }
 
 // renderServiceForm renders the read-only field summary shown in the
