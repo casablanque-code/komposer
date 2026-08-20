@@ -17,6 +17,7 @@ const (
 	modeSaved
 	modeValidation
 	modeImport
+	modeSaveAs
 )
 
 // addServiceDialog holds state for the "add service" modal dialog.
@@ -60,6 +61,11 @@ func newPresetPickerDialog() presetPickerDialog {
 type saveResult struct {
 	filename string
 	err      error
+	// quitAfterSave carries through from the dialog that triggered this
+	// save: when true (the dialog was opened because the user pressed
+	// 'q' with unsaved changes), a successful write should exit the
+	// program afterward instead of returning to the normal view.
+	quitAfterSave bool
 }
 
 type validationDialog struct {
@@ -79,4 +85,26 @@ func newImportDialog() importDialog {
 	ti.CharLimit = 256
 	ti.Width = 50
 	return importDialog{pathInput: ti}
+}
+
+// saveAsDialog holds state for the explicit "save to disk" prompt. It's
+// shown whenever a save actually happens — from Ctrl+S on the main
+// screen, and from 'q'/Ctrl+C when there are unsaved changes — instead
+// of silently writing to a hardcoded "docker-compose.yml" and flashing
+// a banner, which wasn't clear about what had just happened or where
+// the file went.
+type saveAsDialog struct {
+	pathInput     textinput.Model
+	quitAfterSave bool
+}
+
+func newSaveAsDialog(quitAfterSave bool) saveAsDialog {
+	ti := textinput.New()
+	ti.Placeholder = "docker-compose.yml"
+	ti.SetValue("docker-compose.yml")
+	ti.Focus()
+	ti.CursorEnd()
+	ti.CharLimit = 256
+	ti.Width = 50
+	return saveAsDialog{pathInput: ti, quitAfterSave: quitAfterSave}
 }

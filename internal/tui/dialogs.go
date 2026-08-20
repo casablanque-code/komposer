@@ -364,3 +364,56 @@ func (m Model) renderImportDialog() string {
 
 	return renderDialogBox(m.width, m.height, colorAccent, content)
 }
+
+// renderSaveAsDialog renders the explicit "save to disk" prompt. It has
+// two framings depending on how it was opened: a plain save (from
+// Ctrl+S) versus a save-before-quit (from 'q' with unsaved changes),
+// which also offers an explicit "quit without saving" path so the user
+// isn't stuck if they don't want to save at all.
+func (m Model) renderSaveAsDialog() string {
+	w := dialogContentWidth(m.width)
+
+	titleText := "Save docker-compose.yml"
+	borderColor := colorAccent
+	var prompt string
+	var hint string
+
+	if m.saveAsDialog.quitAfterSave {
+		titleText = "You have unsaved changes"
+		borderColor = colorWarning
+		prompt = "Save before quitting? Enter a path, or quit without saving:"
+		hint = "Enter: save & quit • q: quit without saving • Esc: keep working"
+	} else {
+		prompt = "Save to path:"
+		hint = "Enter: save • Esc: cancel"
+	}
+
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorTitle).
+		Width(w).
+		Render(titleText)
+
+	promptLine := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Width(w).
+		Render(prompt)
+
+	input := m.saveAsDialog.pathInput.View()
+
+	hintLine := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Width(w).
+		Render(hint)
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		promptLine,
+		input,
+		"",
+		hintLine,
+	)
+
+	return renderDialogBox(m.width, m.height, borderColor, content)
+}

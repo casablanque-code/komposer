@@ -117,6 +117,12 @@ func (m *Model) saveFormToService() {
 	c.Ports = splitLines(m.formAreas[fieldPorts].Value())
 	c.Environment = splitLines(m.formAreas[fieldEnvironment].Value())
 	c.Volumes = splitLines(m.formAreas[fieldVolumes].Value())
+
+	// This is the single choke point every edit-mode keystroke runs
+	// through (see updateEditField), so it's also the simplest correct
+	// place to mark the config dirty — covers every field, without
+	// needing a separate flag at each call site.
+	m.dirty = true
 }
 
 // splitTrim splits a comma-separated string and trims whitespace from each part,
@@ -143,18 +149,27 @@ func splitLines(s string) []string {
 	return splitTrim(s, "\n")
 }
 
-// nextFormField moves focus to the next field in the form, wrapping around.
+// nextFormField moves focus to the next field in the form, wrapping
+// around. The new field's cursor lands at its start, matching how
+// tabbing forward through a normal form works.
 func (m *Model) nextFormField() {
 	blurField(m, formField(m.focusedFormField))
 	m.focusedFormField = int((formField(m.focusedFormField) + 1) % numFormFields)
-	focusField(m, formField(m.focusedFormField))
+	f := formField(m.focusedFormField)
+	focusField(m, f)
+	cursorStart(m, f)
 }
 
-// prevFormField moves focus to the previous field in the form, wrapping around.
+// prevFormField moves focus to the previous field in the form, wrapping
+// around. The new field's cursor lands at its end, so arrowing Up
+// repeatedly from the bottom of one field continues smoothly into the
+// visual bottom of the field above it, instead of jumping to its top.
 func (m *Model) prevFormField() {
 	blurField(m, formField(m.focusedFormField))
 	m.focusedFormField = int((formField(m.focusedFormField) - 1 + numFormFields) % numFormFields)
-	focusField(m, formField(m.focusedFormField))
+	f := formField(m.focusedFormField)
+	focusField(m, f)
+	cursorEnd(m, f)
 }
 
 func blurField(m *Model, f formField) {
@@ -170,5 +185,21 @@ func focusField(m *Model, f formField) {
 		m.formAreas[f].Focus()
 	} else {
 		m.formInputs[f].Focus()
+	}
+}
+
+func cursorStart(m *Model, f formField) {
+	if isListField(f) {
+		m.formAreas[f].CursorStart()
+	} else {
+		m.formInputs[f].CursorStart()
+	}
+}
+
+func cursorEnd(m *Model, f formField) {
+	if isListField(f) {
+		m.formAreas[f].CursorEnd()
+	} else {
+		m.formInputs[f].CursorEnd()
 	}
 }

@@ -49,6 +49,7 @@ type Model struct {
 	presetPicker     presetPickerDialog
 	validationDialog validationDialog
 	importDialog     importDialog
+	saveAsDialog     saveAsDialog
 
 	// Phase 3: editable form fields for center pane.
 	// Image/Build/Restart are single-line values, so they stay as
@@ -67,6 +68,11 @@ type Model struct {
 
 	// Phase 4: save state
 	lastSave saveResult
+	// dirty tracks whether the in-memory config has changes that
+	// haven't been written to disk since the last successful save.
+	// Drives whether 'q' quits immediately or offers the save dialog
+	// first.
+	dirty bool
 
 	quitting bool
 }
@@ -88,11 +94,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case saveResult:
 		m.lastSave = msg
 		if msg.err == nil {
+			m.dirty = false
 			m.currentMode = modeSaved
+			if msg.quitAfterSave {
+				m.quitting = true
+				return m, tea.Quit
+			}
 			return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
 				return clearSaveBannerMsg{}
 			})
 		}
+		// A failed save always returns to the normal view, even if it
+		// was triggered while trying to quit — losing unsaved work
+		// because of e.g. a permissions error would be worse than
+		// just staying open so the user can see the error and retry.
 		m.currentMode = modeNormal
 		return m, nil
 
@@ -167,13 +182,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateValidation(msg)
 		case modeImport:
 			return m.updateImport(msg)
+		case modeSaveAs:
+			return m.updateSaveAs(msg)
 		}
 
 		// Normal mode keys
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
+
+		case "q":
+			// Previously this quit immediately every time, with no
+			// warning — any unsaved edits were silently lost. Now,
+			// if there's nothing unsaved, quitting still needs no
+			// ceremony; otherwise the same save dialog Ctrl+S uses
+			// opens, with an explicit way to quit without saving.
+			if !m.dirty {
+				m.quitting = true
+				return m, tea.Quit
+			}
+			m.currentMode = modeSaveAs
+			m.saveAsDialog = newSaveAsDialog(true)
+			return m, nil
 
 		case "left", "h":
 			m.focus = prevPane(m.focus)
@@ -205,7 +236,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "ctrl+s":
-			return m, m.saveFile()
+			// Previously this wrote straight to a hardcoded
+			// "docker-compose.yml" with no confirmation, and the only
+			// feedback was a banner that appeared for two seconds —
+			// unclear what had actually happened or where the file
+			// went. Now it opens an explicit dialog with the target
+			// path, prefilled with the same default, so saving is a
+			// deliberate, visible action instead of a surprise.
+			m.currentMode = modeSaveAs
+			m.saveAsDialog = newSaveAsDialog(false)
+			return m, nil
 
 		case "ctrl+v":
 			m.showValidation()
@@ -261,6 +301,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// updateSaveAs handles input in the "save to disk" dialog, shown by
+// Ctrl+S and by 'q' when there are unsaved changes.
+func (m Model) updateSaveAs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch msg.String() {
+	case "esc":
+		// Cancel and go back — this never quits, even if the dialog
+		// was opened via 'q': backing out of the save prompt should
+		// mean "let me keep working", not "discard my changes".
+		m.currentMode = modeNormal
+		return m, nil
+
+	case "enter":
+		path := strings.TrimSpace(m.saveAsDialog.pathInput.Value())
+		if path == "" {
+			path = "docker-compose.yml"
+		}
+		quitAfterSave := m.saveAsDialog.quitAfterSave
+		m.currentMode = modeSaving
+		return m, m.saveFileAs(path, quitAfterSave)
+
+	case "q":
+		// Only treated as "quit without saving" when this dialog was
+		// opened because of an in-progress quit. Otherwise 'q' is just
+		// a character someone might type while editing the path.
+		if m.saveAsDialog.quitAfterSave {
+			m.quitting = true
+			return m, tea.Quit
+		}
+	}
+
+	m.saveAsDialog.pathInput, cmd = m.saveAsDialog.pathInput.Update(msg)
+	return m, cmd
+}
+
 // updateAddService handles input in the "add service" dialog.
 func (m Model) updateAddService(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
@@ -275,6 +351,7 @@ func (m Model) updateAddService(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if name != "" && m.config.GetService(name) == nil {
 			m.config.AddService(name)
 			m.selected = len(m.config.Services) - 1
+			m.dirty = true
 		}
 		m.currentMode = modeNormal
 		return m, nil
@@ -292,6 +369,7 @@ func (m Model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selected >= len(m.config.Services) && len(m.config.Services) > 0 {
 			m.selected = len(m.config.Services) - 1
 		}
+		m.dirty = true
 		m.currentMode = modeNormal
 		return m, nil
 
@@ -305,31 +383,36 @@ func (m Model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // updateEditField handles input in the form edit mode.
 //
-// Enter used to save the whole form and exit edit mode — there was no
-// way to type a newline, so list fields (ports/environment/volumes)
-// could only ever be one comma-separated line. Now:
-//   - Esc saves and exits, same as before.
-//   - Ctrl+S saves (both to the in-memory service and to disk) without
-//     leaving edit mode, so you can keep working.
-//   - Enter is forwarded to the focused field: on a list field
-//     (textarea) that inserts a newline, so you can add rows; on a
-//     single-line field (textinput) it's a no-op, same as it always
-//     was for those.
-//   - Field navigation moved from Up/Down to Tab/Shift+Tab, because
-//     Up/Down are now needed inside the list fields to move the cursor
-//     between the lines you've typed.
+// Field navigation is arrow-key first, matching how the rest of the
+// app already navigates (the service list, presets, everything else)
+// — Tab/Shift+Tab still work as a direct alternative, but aren't
+// required. Up/Down are context-sensitive: inside a multi-line field
+// (Ports/Environment/Volumes) they move the cursor between the lines
+// you've typed, same as any normal text editor; only at the top or
+// bottom edge of the field's content do they cross over to the
+// previous/next field, exactly like tabbing out of a form field once
+// there's nowhere further to go inside it. Single-line fields
+// (Image/Build/Restart) have no internal lines to move between, so
+// Up/Down always switch fields there.
+//
+// Enter is forwarded to the focused field: on a list field that
+// inserts a newline (textarea's native behavior — nothing to do here),
+// on a single-line field it's a no-op, same as it's always been.
+//
+// Both Esc and Ctrl+S save the form to the service and return to
+// normal mode. They're intentionally the same action under two keys —
+// Ctrl+S for the explicit "I'm saving" muscle memory, Esc as the
+// general "I'm done here" key used by every other dialog in the app.
+// Neither one writes to disk; that's a separate, deliberate action via
+// the main screen's Ctrl+S (see updateSaveAs).
 func (m Model) updateEditField(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg.String() {
-	case "esc":
+	case "esc", "ctrl+s":
 		m.saveFormToService()
 		m.currentMode = modeNormal
 		return m, nil
-
-	case "ctrl+s":
-		m.saveFormToService()
-		return m, m.saveFile()
 
 	case "tab":
 		m.nextFormField()
@@ -338,6 +421,25 @@ func (m Model) updateEditField(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab":
 		m.prevFormField()
 		return m, nil
+
+	case "up":
+		f := formField(m.focusedFormField)
+		if !isListField(f) || m.formAreas[f].Line() == 0 {
+			m.prevFormField()
+			return m, nil
+		}
+		// Cursor isn't on the field's first line yet — let it move up
+		// within the field instead of switching fields. Falls through
+		// to the generic forwarding below.
+
+	case "down":
+		f := formField(m.focusedFormField)
+		if !isListField(f) || m.formAreas[f].Line() >= m.formAreas[f].LineCount()-1 {
+			m.nextFormField()
+			return m, nil
+		}
+		// Cursor isn't on the field's last line yet — let it move down
+		// within the field instead of switching fields.
 	}
 
 	f := formField(m.focusedFormField)
@@ -420,6 +522,10 @@ func (m *Model) importFile(path string) error {
 		return err
 	}
 	m.config = imported
+	// The working copy now differs from whatever's on disk at the
+	// default save path until it's explicitly saved, same as any other
+	// change — this isn't itself the file at "docker-compose.yml".
+	m.dirty = true
 	return nil
 }
 
@@ -465,6 +571,8 @@ func (m Model) View() string {
 		return m.renderValidationDialog()
 	case modeImport:
 		return m.renderImportDialog()
+	case modeSaveAs:
+		return m.renderSaveAsDialog()
 	}
 
 	// Normal view rendering
@@ -537,7 +645,7 @@ func (m Model) renderHelpBar() string {
 	case modeConfirmDelete:
 		help = "y: delete • n: cancel"
 	case modeEditField:
-		help = "↑↓: next/prev field • enter/esc: save & close"
+		help = "↑↓: move / switch field • enter: newline in list fields • tab: next field • ctrl+s/esc: save & close"
 	case modePresetPicker:
 		if m.presetPicker.stage == 0 {
 			help = "↑↓: navigate • enter: select • esc: cancel"
@@ -548,6 +656,12 @@ func (m Model) renderHelpBar() string {
 		help = "esc: close"
 	case modeImport:
 		help = "enter: import • esc: cancel"
+	case modeSaveAs:
+		if m.saveAsDialog.quitAfterSave {
+			help = "enter: save & quit • q: quit without saving • esc: cancel"
+		} else {
+			help = "enter: save • esc: cancel"
+		}
 	default:
 		if m.focus == paneLeft {
 			help = "↑↓: navigate • ←→: switch pane • a: add • d: delete • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q: quit"
@@ -557,7 +671,22 @@ func (m Model) renderHelpBar() string {
 			help = "↑↓: scroll • ←→: switch pane • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q: quit"
 		}
 	}
-	return helpStyle.Render(help)
+	// helpStyle previously had no Width set at all, so this line — up to
+	// ~130 chars in the default case — was rendered with zero width
+	// constraint. lipgloss only word-wraps when Width is set (see
+	// renderServiceForm); without it, a line wider than the terminal
+	// just gets whatever the physical terminal does with an overlong
+	// line under bubbletea's absolute cursor positioning, which is not
+	// a clean wrap — parts of it effectively vanish rather than moving
+	// to a second line. Width here makes it wrap like every other piece
+	// of text in the app, and the two rows it can now take are already
+	// accounted for below since contentHeight always calls
+	// lipglossHeight(helpBar) on the real rendered result.
+	w := m.width - 2 // helpStyle has Padding(0, 1) => 1 col each side
+	if w < 1 {
+		w = 1
+	}
+	return helpStyle.Width(w).Render(help)
 }
 
 // paneWidths computes the inner content width (excluding the 2-column

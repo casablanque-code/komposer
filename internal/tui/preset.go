@@ -45,6 +45,7 @@ func (m Model) updatePresetPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				preset := composer.Presets[m.presetPicker.chosenPreset]
 				m.config.AddPreset(preset, name)
 				m.selected = len(m.config.Services) - 1
+				m.dirty = true
 			}
 			m.currentMode = modeNormal
 			return m, nil
