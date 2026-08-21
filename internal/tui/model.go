@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"os"
 	"strings"
 	"time"
 
@@ -85,8 +86,15 @@ func New() Model {
 	}
 }
 
+// Init hides the terminal's real (hardware) cursor for the program's
+// lifetime. Bubble Tea does this automatically in the normal case, but
+// there are terminals/console hosts where the hide sequence doesn't
+// reliably stick — leaving a distracting blinking caret sitting
+// somewhere on screen, separate from the styled cursor each focused
+// textinput/textarea draws itself. Sending this explicitly costs
+// nothing and is the documented, sanctioned way to force it.
 func (m Model) Init() tea.Cmd {
-	return nil
+	return tea.HideCursor
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -306,6 +314,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) updateSaveAs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
+	// A file already exists at the chosen path — Enter here has moved
+	// to a distinct yes/no confirmation instead of writing immediately,
+	// same shape as the existing delete-service confirmation. Without
+	// this, retyping the default path (or just hitting Enter again out
+	// of habit) would silently clobber an existing docker-compose.yml.
+	if m.saveAsDialog.confirmingOverwrite {
+		switch msg.String() {
+		case "y", "Y", "enter":
+			quitAfterSave := m.saveAsDialog.quitAfterSave
+			path := m.saveAsDialog.pendingPath
+			m.currentMode = modeSaving
+			return m, m.saveFileAs(path, quitAfterSave)
+		case "n", "N":
+			// Back to editing the path, not back to the main screen —
+			// the most likely next step is picking a different name,
+			// not abandoning the save entirely.
+			m.saveAsDialog.confirmingOverwrite = false
+			return m, nil
+		case "esc":
+			m.currentMode = modeNormal
+			return m, nil
+		}
+		return m, nil
+	}
+
 	switch msg.String() {
 	case "esc":
 		// Cancel and go back — this never quits, even if the dialog
@@ -318,6 +351,11 @@ func (m Model) updateSaveAs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		path := strings.TrimSpace(m.saveAsDialog.pathInput.Value())
 		if path == "" {
 			path = "docker-compose.yml"
+		}
+		if _, err := os.Stat(path); err == nil {
+			m.saveAsDialog.confirmingOverwrite = true
+			m.saveAsDialog.pendingPath = path
+			return m, nil
 		}
 		quitAfterSave := m.saveAsDialog.quitAfterSave
 		m.currentMode = modeSaving
@@ -446,6 +484,7 @@ func (m Model) updateEditField(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if isListField(f) {
 		if int(f) < len(m.formAreas) {
 			m.formAreas[f], cmd = m.formAreas[f].Update(msg)
+			syncListFieldHeight(&m.formAreas[f])
 			m.saveFormToService()
 		}
 	} else if int(f) < len(m.formInputs) {
@@ -648,7 +687,7 @@ func (m Model) renderHelpBar() string {
 		help = "↑↓: move / switch field • enter: newline in list fields • tab: next field • ctrl+s/esc: save & close"
 	case modePresetPicker:
 		if m.presetPicker.stage == 0 {
-			help = "↑↓: navigate • enter: select • esc: cancel"
+			help = "↑↓: navigate • ←→: switch tab • enter: select • esc: cancel"
 		} else {
 			help = "enter: confirm • esc: back"
 		}
@@ -657,7 +696,9 @@ func (m Model) renderHelpBar() string {
 	case modeImport:
 		help = "enter: import • esc: cancel"
 	case modeSaveAs:
-		if m.saveAsDialog.quitAfterSave {
+		if m.saveAsDialog.confirmingOverwrite {
+			help = "y: overwrite • n: different path • esc: cancel"
+		} else if m.saveAsDialog.quitAfterSave {
 			help = "enter: save & quit • q: quit without saving • esc: cancel"
 		} else {
 			help = "enter: save • esc: cancel"

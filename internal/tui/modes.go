@@ -44,6 +44,12 @@ type presetPickerDialog struct {
 	nameInput    textinput.Model
 	stage        int // 0 = pick preset, 1 = enter name
 	chosenPreset int
+	// tab selects which list stage 0 shows: 0 = single-service Presets,
+	// 1 = multi-service Stacks. Stacks skip the name-input stage
+	// entirely (see updatePresetPicker) since asking for one name
+	// wouldn't make sense for something that adds several services at
+	// once — the whole point is picking it and being done.
+	tab int
 }
 
 func newPresetPickerDialog() presetPickerDialog {
@@ -96,6 +102,10 @@ func newImportDialog() importDialog {
 type saveAsDialog struct {
 	pathInput     textinput.Model
 	quitAfterSave bool
+	// confirmingOverwrite and pendingPath hold the state for the
+	// "file already exists, overwrite?" step — see updateSaveAs.
+	confirmingOverwrite bool
+	pendingPath         string
 }
 
 func newSaveAsDialog(quitAfterSave bool) saveAsDialog {

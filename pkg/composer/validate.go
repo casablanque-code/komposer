@@ -181,11 +181,54 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	}
 
 	for _, env := range cfg.Environment {
-		if key, ok := looksLikeHardcodedSecret(env); ok {
+		key, empty, hardcoded := classifySecretEnv(env)
+		switch {
+		case empty:
+			result.AddWarning(name, "environment", fmt.Sprintf(
+				"'%s' looks like a secret but has no value set — an empty password is "+
+					"just as risky as a hardcoded one (some images even disable auth entirely "+
+					"when it's blank); set it via env_file or ${%s}, or remove the key if it's genuinely unused",
+				key, key))
+		case hardcoded:
 			result.AddWarning(name, "environment", fmt.Sprintf(
 				"'%s' looks like a secret with a value hardcoded directly in the compose file — "+
 					"consider an env_file, Docker secrets, or ${%s} substituted from your shell/CI instead",
 				key, key))
+		}
+	}
+
+	// A database/stateful service with no volumes at all loses every
+	// bit of its data the moment the container is removed or recreated
+	// — which `docker compose up` does routinely. This only fires for
+	// images recognized as stateful (see databaseDataDirs); it has no
+	// way to know that about an arbitrary custom image.
+	if dir, ok := suggestedDataDir(cfg.Image); ok && len(cfg.Volumes) == 0 {
+		result.AddWarning(name, "volumes", fmt.Sprintf(
+			"'%s' looks like a database with no volumes configured — data will be lost "+
+				"every time the container is removed or recreated; consider a volume such as './data:%s'",
+			cfg.Image, dir))
+	}
+
+	// The single most common "wide open database" mistake: Postgres
+	// published on the network with no password configured at all —
+	// whether POSTGRES_PASSWORD was never set or was set to an empty
+	// value, either one leaves it reachable with no auth from anywhere
+	// that can route to the port. This is deliberately specific to
+	// Postgres for now (it's the concrete case that prompted it); the
+	// same pattern could be extended to MySQL/Mongo/Redis's own
+	// password env vars if that turns out to be worth it.
+	if strings.Contains(strings.ToLower(cfg.Image), "postgres") {
+		exposed := false
+		for _, port := range cfg.Ports {
+			if isValidPort(port) && isPortExposedToAllInterfaces(port) {
+				exposed = true
+				break
+			}
+		}
+		if exposed && !hasNonEmptyEnv(cfg.Environment, "POSTGRES_PASSWORD") {
+			result.AddWarning(name, "environment",
+				"postgres is published on the network with no POSTGRES_PASSWORD set — "+
+					"without one, anyone who can reach this port has full database access")
 		}
 	}
 }
@@ -272,25 +315,79 @@ func suggestLocalhostPort(port string) string {
 	}
 }
 
-// looksLikeHardcodedSecret reports whether an "environment:" entry both
-// looks like it's meant to hold a secret (by variable name convention)
-// and has a literal, non-empty value baked in — as opposed to being
-// left for the runtime environment to fill in via "${VAR}" shell
-// substitution, which is the recommended pattern and is not flagged.
-func looksLikeHardcodedSecret(entry string) (key string, ok bool) {
+// classifySecretEnv looks at an "environment:" entry and, if its key
+// looks like it's meant to hold a secret (by variable name convention),
+// reports whether the value is empty or hardcoded. An entry using
+// "${VAR}" substitution is considered fine either way — that's the
+// recommended pattern, not a footgun — so it reports neither.
+func classifySecretEnv(entry string) (key string, empty bool, hardcoded bool) {
 	idx := strings.Index(entry, "=")
 	if idx < 0 {
-		return "", false
+		return "", false, false
 	}
 	key = strings.TrimSpace(entry[:idx])
-	value := strings.TrimSpace(entry[idx+1:])
-	if value == "" || strings.HasPrefix(value, "${") {
-		return "", false
-	}
 	if !secretEnvKeyPattern.MatchString(key) {
-		return "", false
+		return "", false, false
 	}
-	return key, true
+	value := strings.TrimSpace(entry[idx+1:])
+	if strings.HasPrefix(value, "${") {
+		return key, false, false
+	}
+	if value == "" {
+		return key, true, false
+	}
+	return key, false, true
+}
+
+// hasNonEmptyEnv reports whether cfg's environment list sets the given
+// key (case-insensitive, matching how most images read env vars) to a
+// non-empty value. Used for checks that care about one specific,
+// well-known variable rather than the generic secret-name pattern.
+func hasNonEmptyEnv(env []string, key string) bool {
+	for _, entry := range env {
+		idx := strings.Index(entry, "=")
+		if idx < 0 {
+			continue
+		}
+		k := strings.TrimSpace(entry[:idx])
+		if !strings.EqualFold(k, key) {
+			continue
+		}
+		return strings.TrimSpace(entry[idx+1:]) != ""
+	}
+	return false
+}
+
+// databaseDataDirs maps a substring found in an image name to the
+// directory that image conventionally stores its persistent data in —
+// used to give a copy-pasteable volume suggestion instead of just
+// saying "add a volume somewhere".
+var databaseDataDirs = []struct {
+	match string
+	dir   string
+}{
+	{"postgres", "/var/lib/postgresql/data"},
+	{"mysql", "/var/lib/mysql"},
+	{"mariadb", "/var/lib/mysql"},
+	{"mongo", "/data/db"},
+	{"redis", "/data"},
+	{"rabbitmq", "/var/lib/rabbitmq"},
+	{"clickhouse", "/var/lib/clickhouse"},
+	{"elasticsearch", "/usr/share/elasticsearch/data"},
+	{"cassandra", "/var/lib/cassandra"},
+	{"couchdb", "/opt/couchdb/data"},
+}
+
+// suggestedDataDir reports the conventional data directory for a known
+// database/stateful image, if the image name matches one of them.
+func suggestedDataDir(image string) (dir string, ok bool) {
+	lower := strings.ToLower(image)
+	for _, d := range databaseDataDirs {
+		if strings.Contains(lower, d.match) {
+			return d.dir, true
+		}
+	}
+	return "", false
 }
 
 // isValidDuration checks if a string is a valid docker duration (e.g., "30s", "1m30s", "2h").

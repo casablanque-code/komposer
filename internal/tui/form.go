@@ -20,11 +20,6 @@ const (
 	numFormFields
 )
 
-// listFieldHeight is how many lines tall each list field (ports/env/
-// volumes) is shown as. The field itself scrolls internally if you add
-// more lines than this.
-const listFieldHeight = 3
-
 // isListField reports whether a field holds a list of values (edited
 // one item per line, via textarea) rather than a single value (edited
 // on one line, via textinput).
@@ -35,6 +30,21 @@ func isListField(f formField) bool {
 	default:
 		return false
 	}
+}
+
+// syncListFieldHeight sizes a list field's textarea to exactly as many
+// rows as it currently has lines, instead of a fixed height. It used to
+// be a fixed 3 rows with internal scrolling — past 3 lines, the ones
+// you'd already typed scrolled up out of view while you were still
+// adding more. Growing the field itself means every line stays visible;
+// the pane's own MaxHeight (set in renderCenterPane) is still there as
+// a backstop if the whole form ends up taller than the terminal.
+func syncListFieldHeight(ta *textarea.Model) {
+	h := ta.LineCount()
+	if h < 1 {
+		h = 1
+	}
+	ta.SetHeight(h)
 }
 
 // initFormInputs creates a fresh set of input models for editing the
@@ -72,7 +82,6 @@ func (m *Model) initFormInputs() {
 			ta.Prompt = "" // no left-margin glyph — keep width math exact
 			ta.CharLimit = 0
 			ta.SetWidth(fieldWidth)
-			ta.SetHeight(listFieldHeight)
 			m.formAreas[i] = ta
 		} else {
 			ti := textinput.New()
@@ -94,6 +103,12 @@ func (m *Model) initFormInputs() {
 		m.formAreas[fieldPorts].SetValue(strings.Join(c.Ports, "\n"))
 		m.formAreas[fieldEnvironment].SetValue(strings.Join(c.Environment, "\n"))
 		m.formAreas[fieldVolumes].SetValue(strings.Join(c.Volumes, "\n"))
+	}
+
+	for i := range m.formAreas {
+		if isListField(formField(i)) {
+			syncListFieldHeight(&m.formAreas[i])
+		}
 	}
 
 	// Focus first field when entering edit mode
@@ -152,18 +167,21 @@ func splitLines(s string) []string {
 // nextFormField moves focus to the next field in the form, wrapping
 // around. The new field's cursor lands at its start, matching how
 // tabbing forward through a normal form works.
+// nextFormField moves focus to the next field in the form, wrapping
+// around. The new field's cursor lands at its end — same as
+// prevFormField below — since always landing at the end (rather than
+// the start when moving forward and the end when moving back) is what
+// actually reads as consistent while arrowing through the form.
 func (m *Model) nextFormField() {
 	blurField(m, formField(m.focusedFormField))
 	m.focusedFormField = int((formField(m.focusedFormField) + 1) % numFormFields)
 	f := formField(m.focusedFormField)
 	focusField(m, f)
-	cursorStart(m, f)
+	cursorEnd(m, f)
 }
 
 // prevFormField moves focus to the previous field in the form, wrapping
-// around. The new field's cursor lands at its end, so arrowing Up
-// repeatedly from the bottom of one field continues smoothly into the
-// visual bottom of the field above it, instead of jumping to its top.
+// around. The cursor lands at its end, same as nextFormField.
 func (m *Model) prevFormField() {
 	blurField(m, formField(m.focusedFormField))
 	m.focusedFormField = int((formField(m.focusedFormField) - 1 + numFormFields) % numFormFields)
@@ -185,14 +203,6 @@ func focusField(m *Model, f formField) {
 		m.formAreas[f].Focus()
 	} else {
 		m.formInputs[f].Focus()
-	}
-}
-
-func cursorStart(m *Model, f formField) {
-	if isListField(f) {
-		m.formAreas[f].CursorStart()
-	} else {
-		m.formInputs[f].CursorStart()
 	}
 }
 

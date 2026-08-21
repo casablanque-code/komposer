@@ -108,10 +108,18 @@ func (m Model) renderConfirmDeleteDialog() string {
 }
 
 func (m Model) renderPresetPickerDialog() string {
-	if m.presetPicker.stage == 0 {
-		return m.renderPresetList()
+	if m.presetPicker.stage == 1 {
+		return m.renderPresetNameInput()
 	}
-	return m.renderPresetNameInput()
+	return m.renderPresetList()
+}
+
+// presetListItem is the shared row shape for both the Presets tab and
+// the Stacks tab — same visual structure (name + description), just a
+// different backing list.
+type presetListItem struct {
+	Name        string
+	Description string
 }
 
 func (m Model) renderPresetList() string {
@@ -121,61 +129,100 @@ func (m Model) renderPresetList() string {
 		Bold(true).
 		Foreground(colorTitle).
 		Width(w).
-		Render("Choose Preset")
+		Render("Add to compose.yml")
 
-	var rows []string
-	for i, preset := range composer.Presets {
-		selected := i == m.presetPicker.selected
+	tabs := renderPickerTabs(m.presetPicker.tab, w)
 
-		// Simple, clean rendering without extra complexity
-		cursor := "  "
-		if selected {
-			cursor = "▸ "
+	var items []presetListItem
+	if m.presetPicker.tab == 1 {
+		for _, s := range composer.Stacks {
+			items = append(items, presetListItem{Name: s.Name, Description: s.Description})
 		}
-
-		// Name line
-		nameStyle := lipgloss.NewStyle()
-		if selected {
-			nameStyle = nameStyle.Foreground(colorAccent).Bold(true)
-		} else {
-			nameStyle = nameStyle.Bold(true)
+	} else {
+		for _, p := range composer.Presets {
+			items = append(items, presetListItem{Name: p.Name, Description: p.Description})
 		}
-
-		// Truncate the name too, not just the description — this line
-		// previously had no width cap at all, so it was the one piece of
-		// content in the whole app that could grow past the dialog's
-		// width with nothing to stop it.
-		nameLine := cursor + nameStyle.Render(truncateText(preset.Name, w-4))
-
-		// Description line
-		descStyle := lipgloss.NewStyle()
-		if selected {
-			descStyle = descStyle.Foreground(colorTitle)
-		} else {
-			descStyle = descStyle.Foreground(colorSubtle)
-		}
-
-		descText := truncateText(preset.Description, w-4)
-		descLine := "  " + descStyle.Render(descText)
-
-		// Add to rows as single block
-		rows = append(rows, nameLine+"\n"+descLine)
 	}
+	rows := renderPickerRows(items, m.presetPicker.selected, w)
 
+	hintText := "↑↓: navigate • ←→: switch tab • enter: select • esc: cancel"
+	if m.presetPicker.tab == 1 {
+		hintText = "↑↓: navigate • ←→: switch tab • enter: add stack • esc: cancel"
+	}
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
 		Width(w).
-		Render("↑↓: navigate • enter: select • esc: cancel")
+		Render(hintText)
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
-		strings.Join(rows, "\n"),
+		tabs,
+		"",
+		rows,
 		"",
 		hint,
 	)
 
 	return renderDialogBox(m.width, m.height, colorAccent, content)
+}
+
+// renderPickerTabs renders the "Presets / Stacks" tab bar shown above
+// the list in stage 0 of the preset picker, with a divider underneath
+// — the same title+divider convention used by the three main panes
+// (see paneHeader), so this reads as part of the same visual language
+// instead of a one-off.
+func renderPickerTabs(active int, w int) string {
+	labels := []string{"Presets", "Stacks"}
+	var rendered []string
+	for i, label := range labels {
+		style := lipgloss.NewStyle().Padding(0, 1)
+		if i == active {
+			style = style.Bold(true).Foreground(colorAccent).Underline(true)
+		} else {
+			style = style.Foreground(colorSubtle)
+		}
+		rendered = append(rendered, style.Render(label))
+	}
+	bar := lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
+	divider := lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Render(strings.Repeat("─", w))
+	return bar + "\n" + divider
+}
+
+// renderPickerRows renders a cursor + name + description block per
+// item — the row shape both the Presets tab and the Stacks tab use.
+func renderPickerRows(items []presetListItem, selected int, w int) string {
+	if len(items) == 0 {
+		return helpStyle.Render("(none)")
+	}
+
+	var rows []string
+	for i, item := range items {
+		sel := i == selected
+
+		cursor := "  "
+		if sel {
+			cursor = "▸ "
+		}
+
+		nameStyle := lipgloss.NewStyle().Bold(true)
+		if sel {
+			nameStyle = nameStyle.Foreground(colorAccent)
+		}
+		nameLine := cursor + nameStyle.Render(truncateText(item.Name, w-4))
+
+		descStyle := lipgloss.NewStyle().Foreground(colorSubtle)
+		if sel {
+			descStyle = descStyle.Foreground(colorTitle)
+		}
+		descLine := "  " + descStyle.Render(truncateText(item.Description, w-4))
+
+		rows = append(rows, nameLine+"\n"+descLine)
+	}
+
+	return strings.Join(rows, "\n")
 }
 
 func (m Model) renderPresetNameInput() string {
@@ -373,6 +420,10 @@ func (m Model) renderImportDialog() string {
 func (m Model) renderSaveAsDialog() string {
 	w := dialogContentWidth(m.width)
 
+	if m.saveAsDialog.confirmingOverwrite {
+		return m.renderOverwriteConfirmDialog(w)
+	}
+
 	titleText := "Save docker-compose.yml"
 	borderColor := colorAccent
 	var prompt string
@@ -416,4 +467,34 @@ func (m Model) renderSaveAsDialog() string {
 	)
 
 	return renderDialogBox(m.width, m.height, borderColor, content)
+}
+
+// renderOverwriteConfirmDialog renders the "file already exists"
+// yes/no step of the save flow, in the same shape as the existing
+// delete-service confirmation.
+func (m Model) renderOverwriteConfirmDialog(w int) string {
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorWarning).
+		Width(w).
+		Render("File already exists")
+
+	prompt := lipgloss.NewStyle().
+		Width(w).
+		Render(fmt.Sprintf("'%s' already exists. Overwrite it?", m.saveAsDialog.pendingPath))
+
+	hint := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Width(w).
+		Render("y: overwrite • n: pick a different path • Esc: cancel")
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		prompt,
+		"",
+		hint,
+	)
+
+	return renderDialogBox(m.width, m.height, colorWarning, content)
 }
