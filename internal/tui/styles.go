@@ -36,10 +36,18 @@ var (
 	// screen. Previously there was no top-level header at all — only
 	// per-pane titles inside the borders — which made the app start
 	// abruptly at row 0 with no breathing room.
+	//
+	// It now has its own rounded border matching the three panes below,
+	// instead of a solid-color bar with no frame. The filled background
+	// is dropped too — an unfilled bordered box with bold accent text is
+	// the same visual language the three panes already use, so the
+	// header reads as the top of one continuous frame instead of a
+	// separate, disconnected bar sitting above it.
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(colorTitle).
-			Background(colorAccent).
+			Foreground(colorAccent).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorAccent).
 			Padding(0, 2)
 )
 

@@ -649,7 +649,7 @@ func (m Model) View() string {
 			Background(colorSuccess).
 			Padding(0, 1).
 			Bold(true).
-			Render("✓ Saved " + m.lastSave.filename)
+			Render("[OK] Saved " + m.lastSave.filename)
 		mainView = header + "\n" + banner + "\n" + body + "\n" + helpBar
 	} else if m.lastSave.err != nil {
 		banner := lipgloss.NewStyle().
@@ -657,7 +657,7 @@ func (m Model) View() string {
 			Background(colorDanger).
 			Padding(0, 1).
 			Bold(true).
-			Render("✗ Error: " + m.lastSave.err.Error())
+			Render("[ERROR] " + m.lastSave.err.Error())
 		mainView = header + "\n" + banner + "\n" + body + "\n" + helpBar
 	}
 
@@ -665,15 +665,34 @@ func (m Model) View() string {
 }
 
 // renderHeader renders the full-width branding bar at the top of the
-// screen. Width is clamped to exactly m.width (minus the style's own
-// horizontal padding) so the background color never overshoots or
+// screen. Width is clamped to exactly m.width (accounting for the
+// style's own border and padding) so the frame never overshoots or
 // undershoots the terminal on resize.
+//
+// The title text is routed through truncateText before Width/MaxWidth
+// are applied: MaxWidth alone only clips raw bytes at a hard boundary,
+// it doesn't wrap or shorten gracefully, so on a narrow terminal part
+// of the title used to vanish mid-word instead of ending in "…".
+// truncateText does the graceful shortening; MaxWidth stays only as
+// the same backstop used everywhere else.
+//
+// The title is now plain ASCII — no anchor emoji, no other symbol
+// outside the base ASCII range. That's specifically because rendering
+// consistency was reported to vary across terminals/fonts (PowerShell
+// fine, others drifting): a glyph outside a font's normal coverage gets
+// silently substituted from a fallback font by the terminal, and that
+// substitute's rendered cell width often doesn't match the terminal's
+// fixed grid — which desyncs every column calculation after it on that
+// line. Plain ASCII has no such ambiguity in any monospace font.
 func (m Model) renderHeader() string {
-	w := m.width - 4 // headerStyle has Padding(0, 2) => 2 cols each side
+	// Border (1 col each side) + Padding(0, 2) (2 cols each side) = 6
+	// columns of overhead before content width.
+	w := m.width - 6
 	if w < 1 {
 		w = 1
 	}
-	return headerStyle.Width(w).MaxWidth(m.width).Render("⚓ komposer — Docker Compose Builder")
+	title := truncateText("komposer - Docker Compose Builder", w)
+	return headerStyle.Width(w).MaxWidth(m.width).Render(title)
 }
 
 func (m Model) renderHelpBar() string {
@@ -775,7 +794,7 @@ func (m Model) renderLeftPane(width, height int) string {
 	var body strings.Builder
 	names := m.config.ServiceNames()
 	if len(names) == 0 {
-		body.WriteString(helpStyle.Render("(none yet — press 'a')"))
+		body.WriteString(helpStyle.Render("(none yet - press 'a')"))
 	} else {
 		for i, name := range names {
 			cursor := "  "
@@ -806,11 +825,23 @@ func (m Model) renderLeftPane(width, height int) string {
 	// at the bottom, which stayed on screen. MaxHeight makes the box a
 	// hard ceiling, so the title row is always preserved and only the
 	// tail of long content is ever clipped.
+	//
+	// MaxHeight is exactly `height`, not `height + N` — all three panes
+	// share the same `height` value, so an exact cap is what keeps their
+	// bottom borders aligned with each other. A previous version allowed
+	// a few rows of slack (`height + 4`) as extra safety margin, but that
+	// meant a pane whose content genuinely needed those extra rows (e.g.
+	// the center pane while editing a service with several ports/env
+	// vars, which now grows to fit — see syncListFieldHeight) would
+	// render visibly taller than its neighbors, so the row of three
+	// panes stopped lining up — the exact "borders drift / edit mode
+	// lines float" symptom. Capping all three at the same hard `height`
+	// guarantees they always end at the same row, whatever their content.
 	return paneStyle(m.focus == paneLeft).
 		Width(width).
 		MaxWidth(width + 4).
 		Height(height).
-		MaxHeight(height + 4).
+		MaxHeight(height).
 		Render(content)
 }
 
@@ -841,7 +872,7 @@ func (m Model) renderCenterPane(width, height int) string {
 		Width(width).
 		MaxWidth(width + 4).
 		Height(height).
-		MaxHeight(height + 4).
+		MaxHeight(height).
 		Render(content)
 }
 
@@ -852,7 +883,7 @@ func (m Model) renderRightPane(width, height int) string {
 		body = "error rendering yaml: " + err.Error()
 	}
 	if strings.TrimSpace(body) == "" || strings.TrimSpace(body) == "services: {}" {
-		body = helpStyle.Render("(empty — add a service to see YAML)")
+		body = helpStyle.Render("(empty - add a service to see YAML)")
 	}
 
 	header := paneHeader("Preview: docker-compose.yml", width)
@@ -871,7 +902,7 @@ func (m Model) renderRightPane(width, height int) string {
 		Width(width).
 		MaxWidth(width + 4).
 		Height(height).
-		MaxHeight(height + 4).
+		MaxHeight(height).
 		Render(content)
 }
 

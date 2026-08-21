@@ -193,18 +193,52 @@ func renderPickerTabs(active int, w int) string {
 
 // renderPickerRows renders a cursor + name + description block per
 // item — the row shape both the Presets tab and the Stacks tab use.
+// pickerVisibleRows is how many items the preset/stack picker shows at
+// once. With up to ~17 stacks now in the catalog, showing everything
+// unconditionally would make the dialog taller than most terminals —
+// this windows the list around the selected item instead, with
+// "N more above/below" markers so it's clear there's more to scroll to.
+const pickerVisibleRows = 6
+
 func renderPickerRows(items []presetListItem, selected int, w int) string {
 	if len(items) == 0 {
 		return helpStyle.Render("(none)")
 	}
 
+	visible := pickerVisibleRows
+	if visible > len(items) {
+		visible = len(items)
+	}
+
+	// Center the window on the selected item, clamped so it never
+	// scrolls past either end of the list.
+	offset := 0
+	if len(items) > visible {
+		offset = selected - visible/2
+		if offset < 0 {
+			offset = 0
+		}
+		if offset > len(items)-visible {
+			offset = len(items) - visible
+		}
+	}
+
 	var rows []string
-	for i, item := range items {
+
+	if offset > 0 {
+		rows = append(rows, lipgloss.NewStyle().
+			Foreground(colorSubtle).
+			Width(w).
+			Render(fmt.Sprintf("  ^ %d more above", offset)))
+	}
+
+	for i := offset; i < offset+visible; i++ {
+		item := items[i]
 		sel := i == selected
 
 		cursor := "  "
 		if sel {
-			cursor = "▸ "
+			cursor = "> "
 		}
 
 		nameStyle := lipgloss.NewStyle().Bold(true)
@@ -220,6 +254,13 @@ func renderPickerRows(items []presetListItem, selected int, w int) string {
 		descLine := "  " + descStyle.Render(truncateText(item.Description, w-4))
 
 		rows = append(rows, nameLine+"\n"+descLine)
+	}
+
+	if remaining := len(items) - (offset + visible); remaining > 0 {
+		rows = append(rows, lipgloss.NewStyle().
+			Foreground(colorSubtle).
+			Width(w).
+			Render(fmt.Sprintf("  v %d more below", remaining)))
 	}
 
 	return strings.Join(rows, "\n")
@@ -317,7 +358,7 @@ func (m Model) renderValidationDialog() string {
 		sections = append(sections, lipgloss.NewStyle().
 			Foreground(colorSuccess).
 			Width(w).
-			Render("✓ All checks passed!"))
+			Render("[OK] All checks passed!"))
 	}
 
 	if len(m.validationDialog.errors) > 0 {
@@ -325,7 +366,7 @@ func (m Model) renderValidationDialog() string {
 			Bold(true).
 			Foreground(colorDanger).
 			Width(w).
-			Render(fmt.Sprintf("Errors (%d) — must fix before this is valid compose:", len(m.validationDialog.errors)))
+			Render(fmt.Sprintf("Errors (%d) - must fix before this is valid compose:", len(m.validationDialog.errors)))
 		sections = append(sections, errHeader)
 		for _, err := range m.validationDialog.errors {
 			sections = append(sections, lipgloss.NewStyle().
@@ -343,7 +384,7 @@ func (m Model) renderValidationDialog() string {
 			Bold(true).
 			Foreground(colorWarning).
 			Width(w).
-			Render(fmt.Sprintf("Warnings (%d) — valid, but worth a look:", len(m.validationDialog.warnings)))
+			Render(fmt.Sprintf("Warnings (%d) - valid, but worth a look:", len(m.validationDialog.warnings)))
 		sections = append(sections, warnHeader)
 		for _, warning := range m.validationDialog.warnings {
 			sections = append(sections, lipgloss.NewStyle().
