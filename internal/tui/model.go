@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -174,6 +175,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		return m, nil
+
+	case tea.MouseMsg:
+		// Mouse wheel scrolling. Only wired up in normal mode (dialogs
+		// don't scroll with the wheel — their content is either static
+		// or the picker's own Up/Down windowing handles it) and only
+		// for whichever pane currently has focus, matching how
+		// keyboard scrolling already works.
+		if m.currentMode != modeNormal {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		switch m.focus {
+		case paneRight:
+			if m.viewportReady {
+				m.yamlViewport, cmd = m.yamlViewport.Update(msg)
+			}
+		case paneLeft:
+			if len(m.config.Services) > 0 && msg.Action == tea.MouseActionPress {
+				switch msg.Button {
+				case tea.MouseButtonWheelUp:
+					m.selected = (m.selected - 1 + len(m.config.Services)) % len(m.config.Services)
+				case tea.MouseButtonWheelDown:
+					m.selected = (m.selected + 1) % len(m.config.Services)
+				}
+			}
+		}
+		return m, cmd
 
 	case tea.KeyMsg:
 		// Handle mode-specific keys first
@@ -796,12 +824,66 @@ func (m Model) renderLeftPane(width, height int) string {
 	if len(names) == 0 {
 		body.WriteString(helpStyle.Render("(none yet - press 'a')"))
 	} else {
-		for i, name := range names {
+		// The list used to render every service unconditionally and
+		// rely on clipping to hide whatever didn't fit — which meant
+		// that with enough services, arrowing down past the visible
+		// rows moved the selection to an item that had already been
+		// clipped away, with nothing on screen to show it had even
+		// moved. This windows the list around m.selected instead, the
+		// same approach used by the preset/stack picker, so the
+		// selected service is always visible while scrolling with
+		// Up/Down.
+		//
+		// bodyRows leaves 2 lines for paneHeader (title + divider)
+		// above, matching what content actually has room for once
+		// `height` content rows are allotted to the whole pane.
+		bodyRows := height - 2
+		if bodyRows < 1 {
+			bodyRows = 1
+		}
+
+		// When everything fits, show it all with no markers. When it
+		// doesn't, reserve 2 rows for "more above"/"more below"
+		// markers up front — simpler than computing exactly which of
+		// the two will actually show for a given offset, at the cost
+		// of one row of slack at the very top/bottom of the list.
+		visible := bodyRows
+		scrolling := len(names) > bodyRows
+		if scrolling {
+			visible = bodyRows - 2
+			if visible < 1 {
+				visible = 1
+			}
+		}
+		if visible > len(names) {
+			visible = len(names)
+		}
+
+		offset := 0
+		if len(names) > visible {
+			offset = m.selected - visible/2
+			if offset < 0 {
+				offset = 0
+			}
+			if offset > len(names)-visible {
+				offset = len(names) - visible
+			}
+		}
+
+		if offset > 0 {
+			body.WriteString(helpStyle.Render(fmt.Sprintf("^ %d more above", offset)) + "\n")
+		}
+
+		for i := offset; i < offset+visible; i++ {
 			cursor := "  "
 			if i == m.selected {
 				cursor = "> "
 			}
-			body.WriteString(cursor + truncateText(name, width-2) + "\n")
+			body.WriteString(cursor + truncateText(names[i], width-2) + "\n")
+		}
+
+		if remaining := len(names) - (offset + visible); remaining > 0 {
+			body.WriteString(helpStyle.Render(fmt.Sprintf("v %d more below", remaining)))
 		}
 	}
 
@@ -826,22 +908,16 @@ func (m Model) renderLeftPane(width, height int) string {
 	// hard ceiling, so the title row is always preserved and only the
 	// tail of long content is ever clipped.
 	//
-	// MaxHeight is exactly `height`, not `height + N` — all three panes
-	// share the same `height` value, so an exact cap is what keeps their
-	// bottom borders aligned with each other. A previous version allowed
-	// a few rows of slack (`height + 4`) as extra safety margin, but that
-	// meant a pane whose content genuinely needed those extra rows (e.g.
-	// the center pane while editing a service with several ports/env
-	// vars, which now grows to fit — see syncListFieldHeight) would
-	// render visibly taller than its neighbors, so the row of three
-	// panes stopped lining up — the exact "borders drift / edit mode
-	// lines float" symptom. Capping all three at the same hard `height`
-	// guarantees they always end at the same row, whatever their content.
+	// All three panes cap at the same height+2 (content height + border
+	// overhead) so their bottom borders always land on the same row —
+	// see clipLines' doc comment for why the actual clipping happens on
+	// the raw content beforehand rather than relying on MaxHeight alone.
+	content = clipLines(content, height)
 	return paneStyle(m.focus == paneLeft).
 		Width(width).
 		MaxWidth(width + 4).
 		Height(height).
-		MaxHeight(height).
+		MaxHeight(height + 2).
 		Render(content)
 }
 
@@ -868,11 +944,16 @@ func (m Model) renderCenterPane(width, height int) string {
 
 	content := paneHeader("Service Config", width) + "\n" + body
 
+	// See clipLines' doc comment (layout.go) for why content is clipped
+	// here instead of relying on MaxHeight alone to cap an overflowing
+	// pane — MaxHeight by itself chops the bottom border off along with
+	// the excess content once a style has a border.
+	content = clipLines(content, height)
 	return paneStyle(m.focus == paneCenter).
 		Width(width).
 		MaxWidth(width + 4).
 		Height(height).
-		MaxHeight(height).
+		MaxHeight(height + 2).
 		Render(content)
 }
 
@@ -898,11 +979,14 @@ func (m Model) renderRightPane(width, height int) string {
 		content = header + "\n" + body
 	}
 
+	// See clipLines' doc comment (layout.go) for why content is clipped
+	// here instead of relying on MaxHeight alone.
+	content = clipLines(content, height)
 	return paneStyle(m.focus == paneRight).
 		Width(width).
 		MaxWidth(width + 4).
 		Height(height).
-		MaxHeight(height).
+		MaxHeight(height + 2).
 		Render(content)
 }
 
