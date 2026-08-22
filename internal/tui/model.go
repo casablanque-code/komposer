@@ -105,6 +105,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			m.dirty = false
 			m.currentMode = modeSaved
+			m.syncViewportHeight()
 			if msg.quitAfterSave {
 				m.quitting = true
 				return m, tea.Quit
@@ -118,11 +119,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// because of e.g. a permissions error would be worse than
 		// just staying open so the user can see the error and retry.
 		m.currentMode = modeNormal
+		m.syncViewportHeight()
 		return m, nil
 
 	case clearSaveBannerMsg:
 		if m.currentMode == modeSaved {
 			m.currentMode = modeNormal
+			m.syncViewportHeight()
 		}
 		return m, nil
 
@@ -141,19 +144,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// right border instead of being clipped/rewrapped to it. That's
 		// the direct cause of the right border "disappearing" and the
 		// `|` characters drifting on resize.
-		_, _, rightW := paneWidths(m.width)
-		headerHeight := lipglossHeight(paneTitleStyle.Render("Preview: docker-compose.yml")) + 3
-		viewportContentHeight := m.height - headerHeight - 2
-		if viewportContentHeight < 1 {
-			viewportContentHeight = 1
-		}
 		if !m.viewportReady {
-			m.yamlViewport = viewport.New(rightW, viewportContentHeight)
+			_, _, rightW := paneWidths(m.width)
+			m.yamlViewport = viewport.New(rightW, 1) // sized properly below
 			m.viewportReady = true
-		} else {
-			m.yamlViewport.Width = rightW
-			m.yamlViewport.Height = viewportContentHeight
 		}
+		m.syncViewportHeight()
 
 		// Keep the editable form's input widths in sync with the current
 		// terminal size. Previously these were computed once in
@@ -646,21 +642,16 @@ func (m Model) View() string {
 	header := m.renderHeader()
 	helpBar := m.renderHelpBar()
 
-	// The save/error banner (if shown) adds one extra row above the main
-	// view. Reserve that row up front so toggling the banner never shifts
-	// the pane layout by a line — this was previously computed after
-	// contentHeight, causing the whole UI to visibly jump on every save.
-	bannerLines := 0
-	if m.currentMode == modeSaved || m.lastSave.err != nil {
-		bannerLines = 1
-	}
-
-	// contentHeight is the exact number of rows available to the 3 panes:
-	// total terminal rows, minus the header, help bar, and banner rows.
-	contentHeight := m.height - lipglossHeight(header) - lipglossHeight(helpBar) - bannerLines
-	if contentHeight < 1 {
-		contentHeight = 1
-	}
+	// contentHeight is the exact number of rows available to the 3
+	// panes. Computed via availableContentHeight() rather than inline
+	// here, specifically so the WindowSizeMsg handler (which sizes the
+	// YAML preview's viewport) can call the exact same function instead
+	// of maintaining its own separate approximation. Those two used to
+	// drift out of sync — the viewport clamped scrolling against one
+	// height while the pane rendered using a different one, which is
+	// what made the preview's scrolling appear to do nothing and its
+	// bottom border vanish. See availableContentHeight's doc comment.
+	contentHeight := m.availableContentHeight()
 
 	leftW, centerW, rightW := paneWidths(m.width)
 
@@ -690,6 +681,63 @@ func (m Model) View() string {
 	}
 
 	return mainView
+}
+
+// availableContentHeight returns exactly how many content rows the 3
+// main panes have to render into: total terminal rows minus the outer
+// header, the help bar, and the save/error banner row (if one is
+// showing).
+//
+// This is the single source of truth for that number. It used to be
+// computed twice, independently: once inline in View() (to size the
+// panes) and once via a separate, hand-tuned approximation in the
+// WindowSizeMsg handler (to size the YAML preview's viewport). Those
+// two formulas drifted out of sync the moment either side of the app
+// changed shape — e.g. the outer header going from a 1-line bar to a
+// 3-line bordered box — since the viewport's formula had no way to
+// know about that change. The visible result was the YAML preview
+// clamping its scroll offset against a stale height while the pane
+// itself rendered using a different, freshly-computed one: scrolling
+// looked like it did nothing, and the bottom border could vanish
+// entirely when the two heights disagreed enough. Routing both call
+// sites through this one function removes the possibility of that
+// drift outright.
+func (m Model) availableContentHeight() int {
+	header := m.renderHeader()
+	helpBar := m.renderHelpBar()
+
+	bannerLines := 0
+	if m.currentMode == modeSaved || m.lastSave.err != nil {
+		bannerLines = 1
+	}
+
+	contentHeight := m.height - lipglossHeight(header) - lipglossHeight(helpBar) - bannerLines
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+	return contentHeight
+}
+
+// syncViewportHeight keeps the YAML preview viewport's Width/Height
+// matched to whatever availableContentHeight() currently computes.
+// It's called from every place that can change that number — not just
+// WindowSizeMsg (terminal resize), but also wherever the save/error
+// banner appears or disappears, since that's a 1-row change too and
+// nothing about a save happening fires a resize event. Missing any of
+// these call sites would reintroduce exactly the stale-height mismatch
+// availableContentHeight's doc comment describes, just triggered by a
+// banner instead of a resize.
+func (m *Model) syncViewportHeight() {
+	if !m.viewportReady {
+		return
+	}
+	_, _, rightW := paneWidths(m.width)
+	viewportContentHeight := m.availableContentHeight() - 2 // paneHeader = title + divider
+	if viewportContentHeight < 1 {
+		viewportContentHeight = 1
+	}
+	m.yamlViewport.Width = rightW
+	m.yamlViewport.Height = viewportContentHeight
 }
 
 // renderHeader renders the full-width branding bar at the top of the
@@ -959,7 +1007,12 @@ func (m Model) renderCenterPane(width, height int) string {
 
 func (m Model) renderRightPane(width, height int) string {
 	yamlBytes, err := m.config.ExportYAML()
-	body := string(yamlBytes)
+	// YAML marshaling conventionally ends output with a trailing
+	// newline. Left in, viewport.SetContent's internal
+	// strings.Split(s, "\n") turns that into one extra, entirely blank
+	// trailing line — silently eating a row of the viewport's actual
+	// content budget for nothing.
+	body := strings.TrimRight(string(yamlBytes), "\n")
 	if err != nil {
 		body = "error rendering yaml: " + err.Error()
 	}
