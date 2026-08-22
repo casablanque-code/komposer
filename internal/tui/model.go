@@ -98,7 +98,57 @@ func (m Model) Init() tea.Cmd {
 	return tea.HideCursor
 }
 
+// previewBody returns the YAML preview's text content: the exported
+// compose YAML, or a placeholder message if it's empty or failed to
+// export. This is the single source for what the viewport should be
+// showing — used both to keep the persisted viewport in sync (see
+// refreshViewportContent) and for direct rendering in renderRightPane.
+func (m Model) previewBody() string {
+	yamlBytes, err := m.config.ExportYAML()
+	// YAML marshaling conventionally ends output with a trailing
+	// newline. Left in, viewport.SetContent's internal
+	// strings.Split(s, "\n") turns that into one extra, entirely blank
+	// trailing line — silently eating a row of the viewport's actual
+	// content budget for nothing.
+	body := strings.TrimRight(string(yamlBytes), "\n")
+	if err != nil {
+		body = "error rendering yaml: " + err.Error()
+	}
+	if strings.TrimSpace(body) == "" || strings.TrimSpace(body) == "services: {}" {
+		body = helpStyle.Render("(empty - add a service to see YAML)")
+	}
+	return body
+}
+
+// refreshViewportContent keeps the persisted YAML viewport's content in
+// sync with the current config. This has to run from Update(), not
+// from View()/renderRightPane: View() has a value receiver, so a
+// SetContent() call made there only ever mutates a throwaway copy of
+// the model for that one render — it's never persisted back into the
+// program's actual running state, which is whatever Update() returns.
+//
+// That mattered a lot more than it sounds like it should: bubbles'
+// viewport.ScrollDown/ScrollUp both bail out immediately whenever the
+// viewport's internal line count is zero (`len(m.lines) == 0`) — and a
+// viewport that's only ever had SetContent called on a throwaway copy
+// has an internal line count of zero in the copy Update() actually
+// operates on. So LineUp/LineDown were reaching the viewport correctly
+// and calling the right methods on every keypress — and doing
+// precisely nothing, every single time, regardless of how correctly
+// the viewport's Width/Height were sized. This is called unconditionally
+// near the top of Update() so the persisted viewport's content — and
+// therefore its scrollability — is never stale for whatever key
+// handling runs next in the same Update() call.
+func (m *Model) refreshViewportContent() {
+	if !m.viewportReady {
+		return
+	}
+	m.yamlViewport.SetContent(m.previewBody())
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m.refreshViewportContent()
+
 	switch msg := msg.(type) {
 	case saveResult:
 		m.lastSave = msg
@@ -158,7 +208,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// direct cause of the border/content misalignment on resize.
 		if m.currentMode == modeEditField && len(m.formInputs) > 0 {
 			_, centerW, _ := paneWidths(m.width)
-			fieldWidth := centerW - 14 // 12 for label + 2 for spacing
+			fieldWidth := centerW - 14 - panePaddingOverhead // 12 for label + 2 for spacing, minus pane padding overhead
 			if fieldWidth < 20 {
 				fieldWidth = 20
 			}
@@ -736,7 +786,19 @@ func (m *Model) syncViewportHeight() {
 	if viewportContentHeight < 1 {
 		viewportContentHeight = 1
 	}
-	m.yamlViewport.Width = rightW
+	// viewport.View() pads EVERY line to exactly m.Width internally
+	// (it's built on its own lipgloss.NewStyle().Width(contentWidth)
+	// call). Setting that to the pane's full `rightW` meant every
+	// single line of YAML content ended up exactly `rightW` characters
+	// wide — which is exactly the width the outer pane style then
+	// word-wraps at (minus its own padding). The preview wasn't just
+	// occasionally wrapping a too-long line; it was doubling nearly
+	// every line in the file. See panePaddingOverhead's doc comment.
+	viewportWidth := rightW - panePaddingOverhead
+	if viewportWidth < 1 {
+		viewportWidth = 1
+	}
+	m.yamlViewport.Width = viewportWidth
 	m.yamlViewport.Height = viewportContentHeight
 }
 
@@ -854,16 +916,60 @@ func paneWidths(total int) (left, center, right int) {
 	return left, center, right
 }
 
+// panePaddingOverhead is how many columns basePaneStyle's own
+// Padding(0, 1) consumes on each side (1 left + 1 right = 2 total).
+//
+// This matters more than it sounds like it should: lipgloss wraps
+// content to (width - leftPadding - rightPadding), NOT to width
+// itself — see style.go's Render, the "wrapAt := width - leftPadding -
+// rightPadding" line. Any line built to fill a pane's content area to
+// EXACTLY `width` characters — not shorter — silently gets word-wrapped
+// into two lines the moment it passes through paneStyle().Width(width),
+// because the real wrap boundary is width-2, not width.
+//
+// This was the actual root cause behind three things that looked like
+// unrelated bugs: a stray 2-character line appearing under every
+// pane's title divider (the divider was built at exactly `width`
+// dashes), the YAML preview's lines effectively doubling up (the
+// viewport pads every line to exactly its own Width internally, which
+// was also set to the full `width`), and — as a direct consequence of
+// that overflow — the preview pane's bottom border getting clipped off
+// along with the excess. Every place that builds a line meant to span
+// a pane's full content width needs to target width-panePaddingOverhead,
+// not width.
+const panePaddingOverhead = 2
+
 // paneHeader renders a pane's title followed by a full-width divider
 // line, visually separating the title from the body like a table
 // header row. All three panes go through this so the title is always
 // the first line of pane content and never gets mistaken for part of
 // the scrollable body.
+// paneHeader renders a pane's title followed by a full-width divider
+// line, visually separating the title from the body like a table
+// header row. All three panes go through this so the title is always
+// the first line of pane content and never gets mistaken for part of
+// the scrollable body.
+//
+// It's always exactly 2 lines — every caller that sizes something
+// relative to a pane's body (most importantly the YAML viewport's own
+// height, in syncViewportHeight) assumes that and subtracts a fixed 2.
+// The title is truncated, not left to wrap, specifically to guarantee
+// that: at narrow widths "Preview: docker-compose.yml" is long enough
+// to wrap onto a second line on its own, which silently made paneHeader
+// 3 lines tall instead of 2 — the viewport was then sized 1 row too
+// tall for the space actually left under it, which is what clipped its
+// bottom border off at narrow terminal widths.
 func paneHeader(title string, width int) string {
+	// paneTitleStyle has its own Padding(0, 1) — 2 more visible
+	// characters added AFTER truncation. Budgeting only
+	// width-panePaddingOverhead for the text itself would leave the
+	// rendered (padded) title line exactly back at the outer wrap
+	// boundary once that padding is added, right back to the same bug.
+	titleWidth := width - panePaddingOverhead - 2
 	divider := lipgloss.NewStyle().
 		Foreground(colorMuted).
-		Render(strings.Repeat("─", width))
-	return paneTitleStyle.Render(title) + "\n" + divider
+		Render(strings.Repeat("─", width-panePaddingOverhead))
+	return paneTitleStyle.Render(truncateText(title, titleWidth)) + "\n" + divider
 }
 
 func (m Model) renderLeftPane(width, height int) string {
@@ -927,7 +1033,13 @@ func (m Model) renderLeftPane(width, height int) string {
 			if i == m.selected {
 				cursor = "> "
 			}
-			body.WriteString(cursor + truncateText(names[i], width-2) + "\n")
+			// truncateText's budget subtracts panePaddingOverhead on
+			// top of the 2 columns reserved for the cursor prefix — a
+			// maximally long name would otherwise produce a line of
+			// exactly `width` visible characters, which hits the same
+			// wrap-at-width-minus-padding issue paneHeader's divider
+			// did (see panePaddingOverhead's doc comment).
+			body.WriteString(cursor + truncateText(names[i], width-2-panePaddingOverhead) + "\n")
 		}
 
 		if remaining := len(names) - (offset + visible); remaining > 0 {
@@ -1006,19 +1118,7 @@ func (m Model) renderCenterPane(width, height int) string {
 }
 
 func (m Model) renderRightPane(width, height int) string {
-	yamlBytes, err := m.config.ExportYAML()
-	// YAML marshaling conventionally ends output with a trailing
-	// newline. Left in, viewport.SetContent's internal
-	// strings.Split(s, "\n") turns that into one extra, entirely blank
-	// trailing line — silently eating a row of the viewport's actual
-	// content budget for nothing.
-	body := strings.TrimRight(string(yamlBytes), "\n")
-	if err != nil {
-		body = "error rendering yaml: " + err.Error()
-	}
-	if strings.TrimSpace(body) == "" || strings.TrimSpace(body) == "services: {}" {
-		body = helpStyle.Render("(empty - add a service to see YAML)")
-	}
+	body := m.previewBody()
 
 	header := paneHeader("Preview: docker-compose.yml", width)
 
@@ -1062,7 +1162,14 @@ func renderServiceForm(entry composer.ServiceEntry, width int) string {
 		"environment: " + strings.Join(c.Environment, ", "),
 		"volumes:     " + strings.Join(c.Volumes, ", "),
 	}
-	wrapStyle := lipgloss.NewStyle().Width(width)
+	// Width here must be width-panePaddingOverhead, not width: this
+	// inner style has no padding of its own, so it happily wraps/pads
+	// every line to exactly `width` characters — but that then gets
+	// embedded in the outer pane's content, which DOES have padding,
+	// so its own wrap boundary is width-panePaddingOverhead. Lines
+	// built to exactly `width` were getting caught by that outer wrap
+	// and split in two. See panePaddingOverhead's doc comment.
+	wrapStyle := lipgloss.NewStyle().Width(width - panePaddingOverhead)
 	for i, l := range lines {
 		lines[i] = wrapStyle.Render(l)
 	}
