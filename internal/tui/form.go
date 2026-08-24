@@ -5,6 +5,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
+
+	"github.com/casablanque-code/komposer/pkg/composer"
 )
 
 // formField identifies which field in the service config form is being edited.
@@ -69,7 +71,7 @@ func (m *Model) initFormInputs() {
 
 	// Calculate available width for form fields (center pane width - label width - padding)
 	_, centerW, _ := paneWidths(m.width)
-	fieldWidth := centerW - 14 // 12 for label + 2 for spacing
+	fieldWidth := centerW - 14 - panePaddingOverhead // 12 for label + 2 for spacing, minus pane padding overhead
 	if fieldWidth < 20 {
 		fieldWidth = 20
 	}
@@ -103,7 +105,24 @@ func (m *Model) initFormInputs() {
 		m.formAreas[fieldPorts].SetValue(strings.Join(c.Ports, "\n"))
 		m.formAreas[fieldEnvironment].SetValue(strings.Join(c.Environment, "\n"))
 		m.formAreas[fieldVolumes].SetValue(strings.Join(c.Volumes, "\n"))
+
+		// editSnapshot records what the service looked like before any
+		// edits — Esc needs it both to tell whether anything actually
+		// changed (formHasChanges) and, if the user confirms
+		// discarding, what to restore (discardFormChanges). Every field
+		// here is a fresh copy, not a reference into c: c.Ports etc.
+		// would otherwise be the SAME backing array saveFormToService
+		// starts reassigning the moment editing begins.
+		m.editSnapshot = composer.ServiceConfig{
+			Image:       c.Image,
+			Build:       c.Build,
+			Restart:     c.Restart,
+			Ports:       append([]string(nil), c.Ports...),
+			Environment: append([]string(nil), c.Environment...),
+			Volumes:     append([]string(nil), c.Volumes...),
+		}
 	}
+	m.confirmingDiscardEdit = false
 
 	for i := range m.formAreas {
 		if isListField(formField(i)) {
@@ -138,6 +157,68 @@ func (m *Model) saveFormToService() {
 	// place to mark the config dirty — covers every field, without
 	// needing a separate flag at each call site.
 	m.dirty = true
+}
+
+// formHasChanges reports whether the form's current values differ from
+// editSnapshot — what the service looked like when edit mode was
+// entered. Used by Esc to decide whether there's anything worth
+// confirming a discard for.
+func (m Model) formHasChanges() bool {
+	if len(m.config.Services) == 0 || m.selected >= len(m.config.Services) {
+		return false
+	}
+	snap := m.editSnapshot
+	if strings.TrimSpace(m.formInputs[fieldImage].Value()) != snap.Image {
+		return true
+	}
+	if strings.TrimSpace(m.formInputs[fieldBuild].Value()) != snap.Build {
+		return true
+	}
+	if strings.TrimSpace(m.formInputs[fieldRestart].Value()) != snap.Restart {
+		return true
+	}
+	if !stringSlicesEqual(splitLines(m.formAreas[fieldPorts].Value()), snap.Ports) {
+		return true
+	}
+	if !stringSlicesEqual(splitLines(m.formAreas[fieldEnvironment].Value()), snap.Environment) {
+		return true
+	}
+	if !stringSlicesEqual(splitLines(m.formAreas[fieldVolumes].Value()), snap.Volumes) {
+		return true
+	}
+	return false
+}
+
+// discardFormChanges restores the selected service's config to
+// editSnapshot. Needed because saveFormToService already applies every
+// keystroke straight to the live config (so the YAML preview updates as
+// you type) — by the time Esc is pressed there's no separate "unsaved
+// draft" to just walk away from, so discarding means actively putting
+// the original values back.
+func (m *Model) discardFormChanges() {
+	if len(m.config.Services) == 0 || m.selected >= len(m.config.Services) {
+		return
+	}
+	c := m.config.Services[m.selected].Config
+	snap := m.editSnapshot
+	c.Image = snap.Image
+	c.Build = snap.Build
+	c.Restart = snap.Restart
+	c.Ports = append([]string(nil), snap.Ports...)
+	c.Environment = append([]string(nil), snap.Environment...)
+	c.Volumes = append([]string(nil), snap.Volumes...)
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // splitTrim splits a comma-separated string and trims whitespace from each part,

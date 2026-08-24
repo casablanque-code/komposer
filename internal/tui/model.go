@@ -64,6 +64,18 @@ type Model struct {
 	formAreas        []textarea.Model
 	focusedFormField int
 
+	// editSnapshot captures the selected service's config as it was
+	// the moment edit mode was entered. Esc compares the form's
+	// current values against this to decide whether there's actually
+	// anything to discard — and, if the user confirms discarding,
+	// what to revert the live config back to. Needed because every
+	// keystroke while editing is already applied straight to
+	// m.config (see saveFormToService) so the YAML preview can update
+	// live; there's no separate "unsaved draft" to just walk away
+	// from, so discarding means actively restoring these values.
+	editSnapshot          composer.ServiceConfig
+	confirmingDiscardEdit bool
+
 	// Phase 3: scrollable YAML preview
 	yamlViewport  viewport.Model
 	viewportReady bool
@@ -511,17 +523,49 @@ func (m Model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // inserts a newline (textarea's native behavior — nothing to do here),
 // on a single-line field it's a no-op, same as it's always been.
 //
-// Both Esc and Ctrl+S save the form to the service and return to
-// normal mode. They're intentionally the same action under two keys —
-// Ctrl+S for the explicit "I'm saving" muscle memory, Esc as the
-// general "I'm done here" key used by every other dialog in the app.
-// Neither one writes to disk; that's a separate, deliberate action via
-// the main screen's Ctrl+S (see updateSaveAs).
+// Esc discards any changes made this session — confirming first if
+// formHasChanges() says there actually are any — and returns to normal
+// mode without them. Ctrl+S saves the form to the service and returns
+// to normal mode. Neither one writes to disk; that's a separate,
+// deliberate action via the main screen's Ctrl+S (see updateSaveAs).
 func (m Model) updateEditField(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
+	// A discard confirmation is in progress — only y/n/enter/esc are
+	// meaningful here; everything else is ignored rather than falling
+	// through to the form fields underneath.
+	if m.confirmingDiscardEdit {
+		switch msg.String() {
+		case "y", "Y", "enter":
+			m.discardFormChanges()
+			m.confirmingDiscardEdit = false
+			m.currentMode = modeNormal
+			return m, nil
+		case "n", "N", "esc":
+			// Back to editing, not back to the main screen — the
+			// most likely next step is continuing to work, not
+			// abandoning the edit entirely.
+			m.confirmingDiscardEdit = false
+			return m, nil
+		}
+		return m, nil
+	}
+
 	switch msg.String() {
-	case "esc", "ctrl+s":
+	case "esc":
+		// Esc discards rather than saves — but only asks for
+		// confirmation if there's actually something to lose. Every
+		// keystroke while editing is already applied to the live
+		// config (see saveFormToService), so "discard" here means
+		// restoring editSnapshot, not just skipping a save.
+		if !m.formHasChanges() {
+			m.currentMode = modeNormal
+			return m, nil
+		}
+		m.confirmingDiscardEdit = true
+		return m, nil
+
+	case "ctrl+s":
 		m.saveFormToService()
 		m.currentMode = modeNormal
 		return m, nil
@@ -705,11 +749,23 @@ func (m Model) View() string {
 
 	leftW, centerW, rightW := paneWidths(m.width)
 
-	left := m.renderLeftPane(leftW, contentHeight)
-	center := m.renderCenterPane(centerW, contentHeight)
-	right := m.renderRightPane(rightW, contentHeight)
+	var body string
+	if len(m.config.Services) == 0 {
+		// A brand-new/empty config used to just render the normal
+		// 3-pane skeleton with a one-line hint buried in each pane and
+		// the rest of the screen dead blank space — not really a
+		// "first thing you see" experience. This replaces that with an
+		// actual welcome screen; it goes away the moment a service
+		// exists (added, imported, or from a preset/stack), so it's
+		// only ever seen once per session.
+		body = m.renderWelcomeScreen(m.width, contentHeight)
+	} else {
+		left := m.renderLeftPane(leftW, contentHeight)
+		center := m.renderCenterPane(centerW, contentHeight)
+		right := m.renderRightPane(rightW, contentHeight)
+		body = joinHorizontal(left, center, right)
+	}
 
-	body := joinHorizontal(left, center, right)
 	mainView := header + "\n" + body + "\n" + helpBar
 
 	if m.currentMode == modeSaved && m.lastSave.err == nil {
@@ -752,6 +808,22 @@ func (m Model) View() string {
 // entirely when the two heights disagreed enough. Routing both call
 // sites through this one function removes the possibility of that
 // drift outright.
+// paneBorderHeight is how many rows a pane's own border consumes (1
+// top + 1 bottom = 2). availableContentHeight() returns the CONTENT
+// budget the 3 panes are given — the height param renderLeftPane etc.
+// treat as pre-border — so it has to reserve these 2 rows on top of
+// the header/help bar/banner, or the pane row (content+border) ends up
+// exactly 2 rows taller than the terminal has room for. That overflow
+// doesn't get clipped from the bottom the way you'd expect in a
+// scrolling terminal — bubbletea writes the whole frame via absolute
+// cursor positioning, so when it's taller than the terminal the
+// OS-level terminal buffer itself scrolls, pushing the top of the
+// frame (the header) up and out of view instead. This was most visible
+// whenever the help bar happened to wrap onto a second line, since
+// that alone was often enough extra height to tip a borderline-tight
+// terminal over into losing the header entirely.
+const paneBorderHeight = 2
+
 func (m Model) availableContentHeight() int {
 	header := m.renderHeader()
 	helpBar := m.renderHelpBar()
@@ -761,7 +833,7 @@ func (m Model) availableContentHeight() int {
 		bannerLines = 1
 	}
 
-	contentHeight := m.height - lipglossHeight(header) - lipglossHeight(helpBar) - bannerLines
+	contentHeight := m.height - lipglossHeight(header) - lipglossHeight(helpBar) - bannerLines - paneBorderHeight
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
@@ -841,7 +913,11 @@ func (m Model) renderHelpBar() string {
 	case modeConfirmDelete:
 		help = "y: delete • n: cancel"
 	case modeEditField:
-		help = "↑↓: move / switch field • enter: newline in list fields • tab: next field • ctrl+s/esc: save & close"
+		if m.confirmingDiscardEdit {
+			help = "y: discard • n/esc: keep editing"
+		} else {
+			help = "↑↓: move / switch field • enter: newline in list fields • tab: next field • ctrl+s: save • esc: discard"
+		}
 	case modePresetPicker:
 		if m.presetPicker.stage == 0 {
 			help = "↑↓: navigate • ←→: switch tab • enter: select • esc: cancel"
@@ -959,6 +1035,84 @@ const panePaddingOverhead = 2
 // 3 lines tall instead of 2 — the viewport was then sized 1 row too
 // tall for the space actually left under it, which is what clipped its
 // bottom border off at narrow terminal widths.
+// renderWelcomeScreen renders the first-launch screen shown in place of
+// the 3-pane layout when the config has no services yet. It's centered
+// in the same content area the panes would otherwise occupy, and
+// disappears the moment a service exists by any means — added by hand,
+// imported, or from a preset/stack.
+func (m Model) renderWelcomeScreen(width, height int) string {
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorAccent).
+		Render("komposer")
+
+	tagline := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Render("Build a docker-compose.yml in seconds")
+
+	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(colorTitle)
+	descStyle := lipgloss.NewStyle().Foreground(colorSubtle)
+
+	row := func(key, desc string) string {
+		return keyStyle.Render(fmt.Sprintf("%-8s", key)) + descStyle.Render(desc)
+	}
+
+	actionsBlock := lipgloss.JoinVertical(lipgloss.Left,
+		row("a", "add a single service"),
+		row("Ctrl+P", "browse presets and ready-made stacks"),
+		row("Ctrl+O", "import an existing docker-compose.yml"),
+	)
+
+	hint := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Render("q to quit anytime")
+
+	box := lipgloss.JoinVertical(lipgloss.Center,
+		title,
+		tagline,
+		"",
+		actionsBlock,
+		"",
+		hint,
+	)
+
+	// The box stays at its natural (compact) size on any terminal wide
+	// enough for it — MaxWidth alone would have clipped raw bytes off
+	// the right edge on a narrow terminal instead of wrapping (the same
+	// lesson learned everywhere else in this file: it truncates, it
+	// doesn't reflow). Width() is used instead so lipgloss's own wrap
+	// engine can properly re-flow the text and keep the border intact
+	// when the box has to shrink.
+	//
+	// This style has Padding(1, 4) — lipgloss wraps to (Width -
+	// leftPadding - rightPadding), so the value passed to Width() has
+	// to be the desired CONTENT budget plus that 8 back, or the content
+	// wraps 8 columns earlier than intended even when there's plenty of
+	// room. This is the exact same padding-eats-columns behavior
+	// documented on panePaddingOverhead, just easy to re-trip over
+	// because this box's padding (8) differs from the panes' (2).
+	const boxPadding = 8 // Padding(1, 4): 4 cols each side
+	const boxBorder = 2  // 1 col each side
+	naturalWidth := lipgloss.Width(box)
+	maxContentBudget := width - boxBorder - boxPadding
+	if maxContentBudget < 20 {
+		maxContentBudget = 20
+	}
+	contentBudget := naturalWidth
+	if contentBudget > maxContentBudget {
+		contentBudget = maxContentBudget
+	}
+
+	boxed := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorAccent).
+		Padding(1, 4).
+		Width(contentBudget + boxPadding).
+		Render(box)
+
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, boxed)
+}
+
 func paneHeader(title string, width int) string {
 	// paneTitleStyle has its own Padding(0, 1) — 2 more visible
 	// characters added AFTER truncation. Budgeting only

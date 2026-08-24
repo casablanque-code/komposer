@@ -316,6 +316,14 @@ func (m Model) renderEditableForm() string {
 		return ""
 	}
 
+	if m.confirmingDiscardEdit {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.NewStyle().Bold(true).Foreground(colorWarning).Render("Discard changes to this service?"),
+			"",
+			helpStyle.Render("y: discard • n/esc: keep editing"),
+		)
+	}
+
 	labels := []string{"Image:", "Build:", "Ports:", "Environment:", "Volumes:", "Restart:"}
 
 	var lines []string
@@ -338,7 +346,7 @@ func (m Model) renderEditableForm() string {
 	}
 
 	lines = append(lines, "", helpStyle.Render(
-		"Tab/Shift+Tab: switch field • Enter: newline in list fields • Ctrl+S: save • Esc: done"))
+		"Tab/Shift+Tab: switch field • Enter: newline in list fields • Ctrl+S: save • Esc: discard"))
 
 	return strings.Join(lines, "\n")
 }
