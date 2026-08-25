@@ -1010,7 +1010,27 @@ func (m Model) renderHelpBar() string {
 	if w < 1 {
 		w = 1
 	}
-	return helpStyle.Width(w).Render(help)
+	return helpStyle.Width(w).Render(styleHelpText(help))
+}
+
+// styleHelpText highlights the key-combo half of each "key: description"
+// entry in a help bar string, leaving the description half in the
+// existing muted gray. Every help string in this file follows that
+// "key: description" shape, entries separated by " • " — previously the
+// whole line was rendered in one flat gray, so the actual keys the user
+// needs to press didn't stand out from the sentence-like descriptions
+// around them.
+func styleHelpText(help string) string {
+	segments := strings.Split(help, " • ")
+	for i, seg := range segments {
+		key, desc, ok := strings.Cut(seg, ": ")
+		if !ok {
+			segments[i] = helpDescStyle.Render(seg)
+			continue
+		}
+		segments[i] = helpKeyStyle.Render(key) + helpDescStyle.Render(": "+desc)
+	}
+	return strings.Join(segments, helpDescStyle.Render(" • "))
 }
 
 // normalHelpText returns the plain (unstyled) help text for every mode

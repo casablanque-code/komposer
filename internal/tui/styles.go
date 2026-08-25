@@ -32,6 +32,19 @@ var (
 			Foreground(colorSubtle).
 			Padding(0, 1)
 
+	// helpKeyStyle highlights the key-combo portion of each help bar
+	// entry (e.g. "ctrl+s" in "ctrl+s: save") in the same accent used
+	// for focus highlights elsewhere, so the keys read as distinct
+	// actionable chips instead of blending into the surrounding
+	// sentence-like gray text. helpDescStyle keeps the description
+	// half in the existing muted gray — see styleHelpText.
+	helpKeyStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(colorAccent)
+
+	helpDescStyle = lipgloss.NewStyle().
+			Foreground(colorSubtle)
+
 	// headerStyle is the full-width branding bar at the very top of the
 	// screen. Previously there was no top-level header at all — only
 	// per-pane titles inside the borders — which made the app start
