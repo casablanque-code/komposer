@@ -1,0 +1,52 @@
+version: 2
+
+project_name: komposer
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: komposer
+    main: .
+    binary: komposer
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: komposer
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    # No explicit `files:` list: GoReleaser's default already includes
+    # README*/LICENSE*/CHANGELOG as globs, which silently match nothing
+    # instead of failing the release if one of them isn't present yet
+    # (there's no LICENSE file in the repo as of this writing).
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+release:
+  github:
+    owner: casablanque-code
+    name: komposer

@@ -5,3 +5,4 @@ docker-compose.yml
 .DS_Store
 *.patch
 *.exe
+coverage.out
