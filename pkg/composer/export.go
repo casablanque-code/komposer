@@ -1,6 +1,7 @@
 package composer
 
 import (
+	"bytes"
 	"fmt"
 
 	"gopkg.in/yaml.v3"
@@ -57,7 +58,24 @@ func (c *ComposeConfig) ExportYAML() ([]byte, error) {
 	}
 
 	doc := &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{root}}
-	return yaml.Marshal(doc)
+
+	// yaml.Marshal's package-level helper defaults to a 4-space indent,
+	// which is valid YAML but not what any real-world docker-compose.yml
+	// uses — every reference file, the Compose spec's own examples, and
+	// every other tool in this ecosystem indent with 2 spaces. Going
+	// through an explicit Encoder with SetIndent(2) is the only way to
+	// control this; the package-level Marshal function hardcodes 4 and
+	// exposes no option to change it.
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(doc); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // serviceToNode converts a ServiceConfig into a yaml.Node, handling the
