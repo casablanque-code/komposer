@@ -1,5 +1,7 @@
 # komposer
 
+[![CI](https://github.com/casablanque-code/komposer/actions/workflows/ci.yml/badge.svg)](https://github.com/casablanque-code/komposer/actions/workflows/ci.yml)
+
 A terminal UI for putting together a `docker-compose.yml` fast — either
 service by service, or as a ready-made multi-service stack (a database
 plus its admin UI, a blog platform plus its database, and so on) in a
@@ -69,21 +71,66 @@ file.
 - Mouse wheel and keyboard both scroll the services list, the YAML
   preview, and the validation report.
 
-## Requirements
+## Install
 
-- Go 1.24.2+
+### Download a prebuilt binary (Linux, macOS, Windows)
 
-## Build
+Grab the archive for your platform from the
+[Releases page](https://github.com/casablanque-code/komposer/releases),
+then:
+
+**Linux / macOS**
 
 ```sh
+tar -xzf komposer_*_<os>_<arch>.tar.gz
+chmod +x komposer
+sudo mv komposer /usr/local/bin/   # or anywhere on your $PATH
+```
+
+macOS will refuse to run the binary the first time because it isn't
+notarized (Gatekeeper). Either right-click it in Finder and choose
+"Open" once, or clear the quarantine flag from a terminal:
+
+```sh
+xattr -d com.apple.quarantine komposer
+```
+
+**Windows**
+
+Unzip `komposer_*_windows_<arch>.zip` and run `komposer.exe` from a
+terminal (PowerShell or Windows Terminal — it's a TUI, it needs a real
+terminal, not double-clicking from Explorer). Put it somewhere on your
+`PATH` (e.g. `%LOCALAPPDATA%\Microsoft\WindowsApps`) if you want to run
+it as just `komposer` from anywhere.
+
+Windows SmartScreen may warn about an unsigned binary the first time —
+click "More info" → "Run anyway". This is expected for an unsigned
+open-source binary; there's no code-signing certificate behind these
+builds.
+
+`<arch>` is `amd64` for regular 64-bit Intel/AMD machines and `arm64`
+for Apple Silicon Macs or ARM64 Windows/Linux.
+
+### Via `go install` (any platform with Go 1.24.2+)
+
+```sh
+go install github.com/casablanque-code/komposer@latest
+```
+
+This puts a `komposer` binary in `$(go env GOPATH)/bin` — make sure
+that's on your `PATH`. Installs a specific version instead of the
+latest with `@vX.Y.Z` (e.g. `@v0.1.0`).
+
+### From source
+
+```sh
+git clone https://github.com/casablanque-code/komposer.git
+cd komposer
 go build -o komposer .
 ```
 
-Or run it directly without a separate build step:
-
-```sh
-go run .
-```
+Requires Go 1.24.2+. Run it directly without a separate build step
+with `go run .` instead, if you'd rather not produce a binary.
 
 ## Usage
 
@@ -141,3 +188,19 @@ go run .
   import/export, and validation. No TUI dependencies — usable as a
   library on its own.
 - `internal/tui` — the Bubble Tea/Lipgloss terminal UI.
+
+## Development
+
+```sh
+go build ./...
+go vet ./...
+go test ./... -race
+```
+
+CI (`.github/workflows/ci.yml`) runs `go vet`, a `gofmt` check, and
+the test suite (with `-race`) on Linux, macOS, and Windows for every
+push and pull request against `main`.
+
+Tagged releases (`vX.Y.Z`) are built and published automatically by
+`.github/workflows/release.yml` via [GoReleaser](https://goreleaser.com/)
+— see `.goreleaser.yaml` for the build/archive configuration.
