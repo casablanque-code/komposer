@@ -424,31 +424,77 @@ func (m Model) renderValidationDialog() string {
 		visible = 3
 	}
 
+	// The "^ N more above" / "v N more below" indicator lines are
+	// themselves extra rows on top of the body lines actually shown.
+	// The previous version budgeted `visible` rows for the body and
+	// then appended up to two more indicator lines on top of that —
+	// so as soon as the report was scrollable in both directions, the
+	// rendered dialog was 1-2 rows taller than the `visible` budget
+	// its own height math (and the fixed dialogChrome constant above)
+	// assumed. That's what pushed the box's bottom border past the
+	// terminal height and made scrolling look like it was sliding the
+	// whole dialog off-screen instead of just scrolling the report:
+	// each added indicator line was never accounted for, so it grew
+	// the box instead of stealing a line from the body.
+	//
+	// Resolve which indicators will actually be shown first, shrink
+	// the body's share of `visible` by that many lines, and only then
+	// clamp scroll against the now-final body window — so the total
+	// rendered height (indicators + body lines) never exceeds
+	// `visible` regardless of scroll position.
 	scroll := m.validationDialog.scroll
-	if scroll > len(bodyLines)-visible {
-		scroll = len(bodyLines) - visible
-	}
 	if scroll < 0 {
 		scroll = 0
 	}
 
+	showAbove := scroll > 0
+	bodyBudget := visible
+	if showAbove {
+		bodyBudget--
+	}
+	if bodyBudget < 1 {
+		bodyBudget = 1
+	}
+	// Whether a "more below" indicator is needed depends on how many
+	// lines are left after this window — which depends on bodyBudget,
+	// which is why this has to be resolved after showAbove above.
+	showBelow := len(bodyLines)-scroll > bodyBudget
+	if showBelow {
+		bodyBudget--
+		if bodyBudget < 1 {
+			bodyBudget = 1
+		}
+	}
+
+	// Now that the final budget is known, clamp scroll so the window
+	// doesn't run past the end of the report, and recheck whether that
+	// still leaves anything above/below (clamping can change both).
+	if maxScroll := len(bodyLines) - bodyBudget; scroll > maxScroll {
+		scroll = maxScroll
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	showAbove = scroll > 0
+	end := scroll + bodyBudget
+	if end > len(bodyLines) {
+		end = len(bodyLines)
+	}
+	showBelow = len(bodyLines)-end > 0
+
 	var windowed []string
-	if scroll > 0 {
+	if showAbove {
 		windowed = append(windowed, lipgloss.NewStyle().
 			Foreground(colorSubtle).
 			Width(w).
 			Render(fmt.Sprintf("^ %d more above", scroll)))
 	}
-	end := scroll + visible
-	if end > len(bodyLines) {
-		end = len(bodyLines)
-	}
 	windowed = append(windowed, bodyLines[scroll:end]...)
-	if remaining := len(bodyLines) - end; remaining > 0 {
+	if showBelow {
 		windowed = append(windowed, lipgloss.NewStyle().
 			Foreground(colorSubtle).
 			Width(w).
-			Render(fmt.Sprintf("v %d more below", remaining)))
+			Render(fmt.Sprintf("v %d more below", len(bodyLines)-end)))
 	}
 
 	windowedBody := strings.Join(windowed, "\n")
