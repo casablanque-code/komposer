@@ -250,11 +250,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			switch msg.Button {
 			case tea.MouseButtonWheelUp:
-				if m.validationDialog.scroll > 0 {
-					m.validationDialog.scroll--
-				}
+				m.validationDialog.scroll = m.clampedValidationScroll(m.validationDialog.scroll - 1)
 			case tea.MouseButtonWheelDown:
-				m.validationDialog.scroll++
+				m.validationDialog.scroll = m.clampedValidationScroll(m.validationDialog.scroll + 1)
 			}
 			return m, nil
 		}
@@ -673,29 +671,26 @@ func (m Model) updateValidation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "up", "k":
-		if m.validationDialog.scroll > 0 {
-			m.validationDialog.scroll--
-		}
+		m.validationDialog.scroll = m.clampedValidationScroll(m.validationDialog.scroll - 1)
 		return m, nil
 
 	case "down", "j":
-		// No strict upper bound here — renderValidationDialog clamps
-		// defensively at render time against however many lines it
-		// actually has, so a scroll value that's run ahead of the
-		// content (e.g. right after switching from a longer report to
-		// a shorter one) can never index out of range.
-		m.validationDialog.scroll++
+		// Clamped immediately against the report's actual length (see
+		// clampedValidationScroll / validationScrollWindow), not just
+		// at render time — otherwise pressing "down" past the end of
+		// the report kept incrementing the stored offset with no
+		// bound, and scrolling back up required pressing "up" exactly
+		// as many times as "down" had been pressed past the end, even
+		// though the screen itself hadn't moved in the meantime.
+		m.validationDialog.scroll = m.clampedValidationScroll(m.validationDialog.scroll + 1)
 		return m, nil
 
 	case "pgup":
-		m.validationDialog.scroll -= 10
-		if m.validationDialog.scroll < 0 {
-			m.validationDialog.scroll = 0
-		}
+		m.validationDialog.scroll = m.clampedValidationScroll(m.validationDialog.scroll - 10)
 		return m, nil
 
 	case "pgdown":
-		m.validationDialog.scroll += 10
+		m.validationDialog.scroll = m.clampedValidationScroll(m.validationDialog.scroll + 10)
 		return m, nil
 	}
 	return m, nil
