@@ -5,6 +5,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -38,6 +39,11 @@ const (
 type Model struct {
 	config *composer.ComposeConfig
 	focus  pane
+
+	// welcomeSelected tracks which button is highlighted on the
+	// welcome screen (see renderWelcomeScreen), shown in place of the
+	// 3-pane layout while there are no services yet.
+	welcomeSelected int
 
 	width  int
 	height int
@@ -235,14 +241,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		// Mouse wheel scrolling. Only wired up in normal mode (dialogs
-		// don't scroll with the wheel — their content is either static
-		// or the picker's own Up/Down windowing handles it) and only
-		// for whichever pane currently has focus, matching how
-		// keyboard scrolling already works.
+		// Mouse wheel scrolling. The validation dialog now scrolls too
+		// (see modeValidation below) — everything else stays either
+		// static or covered by the picker's own Up/Down windowing.
+		if m.currentMode == modeValidation {
+			if msg.Action != tea.MouseActionPress {
+				return m, nil
+			}
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				if m.validationDialog.scroll > 0 {
+					m.validationDialog.scroll--
+				}
+			case tea.MouseButtonWheelDown:
+				m.validationDialog.scroll++
+			}
+			return m, nil
+		}
 		if m.currentMode != modeNormal {
 			return m, nil
 		}
+
+		// Welcome screen: a left click selects (and immediately
+		// activates) whichever button it landed on.
+		if len(m.config.Services) == 0 {
+			if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+				if i := welcomeButtonAt(m, msg.Y); i >= 0 {
+					m.welcomeSelected = i
+					return m.activateWelcomeButton(i)
+				}
+			}
+			return m, nil
+		}
+
 		var cmd tea.Cmd
 		switch m.focus {
 		case paneRight:
@@ -281,6 +312,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Normal mode keys
+
+		// The welcome screen (shown when there are no services yet)
+		// gets its own key handling ahead of the normal 3-pane keys —
+		// there's nothing to switch panes between or navigate a
+		// service list in, so Up/Down/Enter here move between and
+		// activate its 3 buttons instead. 'a'/Ctrl+P/Ctrl+O still work
+		// directly too (handled further down), so this is an
+		// additional way in, not a replacement.
+		if len(m.config.Services) == 0 {
+			switch msg.String() {
+			case "up", "k":
+				m.welcomeSelected = (m.welcomeSelected - 1 + len(welcomeButtons)) % len(welcomeButtons)
+				return m, nil
+			case "down", "j":
+				m.welcomeSelected = (m.welcomeSelected + 1) % len(welcomeButtons)
+				return m, nil
+			case "enter":
+				return m.activateWelcomeButton(m.welcomeSelected)
+			}
+		}
+
 		switch msg.String() {
 		case "ctrl+c":
 			m.quitting = true
@@ -619,6 +671,32 @@ func (m Model) updateValidation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "enter":
 		m.currentMode = modeNormal
 		return m, nil
+
+	case "up", "k":
+		if m.validationDialog.scroll > 0 {
+			m.validationDialog.scroll--
+		}
+		return m, nil
+
+	case "down", "j":
+		// No strict upper bound here — renderValidationDialog clamps
+		// defensively at render time against however many lines it
+		// actually has, so a scroll value that's run ahead of the
+		// content (e.g. right after switching from a longer report to
+		// a shorter one) can never index out of range.
+		m.validationDialog.scroll++
+		return m, nil
+
+	case "pgup":
+		m.validationDialog.scroll -= 10
+		if m.validationDialog.scroll < 0 {
+			m.validationDialog.scroll = 0
+		}
+		return m, nil
+
+	case "pgdown":
+		m.validationDialog.scroll += 10
+		return m, nil
 	}
 	return m, nil
 }
@@ -907,43 +985,15 @@ func (m Model) renderHeader() string {
 
 func (m Model) renderHelpBar() string {
 	var help string
-	switch m.currentMode {
-	case modeAddService:
-		help = "enter: confirm • esc: cancel"
-	case modeConfirmDelete:
-		help = "y: delete • n: cancel"
-	case modeEditField:
-		if m.confirmingDiscardEdit {
-			help = "y: discard • n/esc: keep editing"
-		} else {
-			help = "↑↓: move / switch field • enter: newline in list fields • tab: next field • ctrl+s: save • esc: discard"
-		}
-	case modePresetPicker:
-		if m.presetPicker.stage == 0 {
-			help = "↑↓: navigate • ←→: switch tab • enter: select • esc: cancel"
-		} else {
-			help = "enter: confirm • esc: back"
-		}
-	case modeValidation:
-		help = "esc: close"
-	case modeImport:
-		help = "enter: import • esc: cancel"
-	case modeSaveAs:
-		if m.saveAsDialog.confirmingOverwrite {
-			help = "y: overwrite • n: different path • esc: cancel"
-		} else if m.saveAsDialog.quitAfterSave {
-			help = "enter: save & quit • q: quit without saving • esc: cancel"
-		} else {
-			help = "enter: save • esc: cancel"
-		}
+	switch {
+	case m.currentMode == modeNormal && len(m.config.Services) == 0:
+		// The welcome screen already lists its options as buttons —
+		// the normal 3-pane help text (pane switching, add/delete,
+		// etc.) doesn't apply to anything visible on this screen, so
+		// showing it here was misleading rather than helpful.
+		help = "↑↓: choose • enter: select • q: quit"
 	default:
-		if m.focus == paneLeft {
-			help = "↑↓: navigate • ←→: switch pane • a: add • d: delete • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q: quit"
-		} else if m.focus == paneCenter {
-			help = "←→: switch pane • enter: edit • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q: quit"
-		} else {
-			help = "↑↓: scroll • ←→: switch pane • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q: quit"
-		}
+		help = m.normalHelpText()
 	}
 	// helpStyle previously had no Width set at all, so this line — up to
 	// ~130 chars in the default case — was rendered with zero width
@@ -961,6 +1011,49 @@ func (m Model) renderHelpBar() string {
 		w = 1
 	}
 	return helpStyle.Width(w).Render(help)
+}
+
+// normalHelpText returns the plain (unstyled) help text for every mode
+// except the welcome screen, which renderHelpBar special-cases before
+// this ever runs. Kept unstyled — not returning an already-rendered
+// string — so renderHelpBar only ever applies Width/Render once.
+func (m Model) normalHelpText() string {
+	switch m.currentMode {
+	case modeAddService:
+		return "enter: confirm • esc: cancel"
+	case modeConfirmDelete:
+		return "y: delete • n: cancel"
+	case modeEditField:
+		if m.confirmingDiscardEdit {
+			return "y: discard • n/esc: keep editing"
+		}
+		return "↑↓: move / switch field • enter: newline in list fields • tab: next field • ctrl+s: save • esc: discard"
+	case modePresetPicker:
+		if m.presetPicker.stage == 0 {
+			return "↑↓: navigate • ←→: switch tab • enter: select • esc: cancel"
+		}
+		return "enter: confirm • esc: back"
+	case modeValidation:
+		return "↑↓: scroll • esc: close"
+	case modeImport:
+		return "enter: import • esc: cancel"
+	case modeSaveAs:
+		if m.saveAsDialog.confirmingOverwrite {
+			return "y: overwrite • n: different path • esc: cancel"
+		}
+		if m.saveAsDialog.quitAfterSave {
+			return "enter: save & quit • q: quit without saving • esc: cancel"
+		}
+		return "enter: save • esc: cancel"
+	default:
+		if m.focus == paneLeft {
+			return "↑↓: navigate • ←→: switch pane • a: add • d: delete • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q: quit"
+		}
+		if m.focus == paneCenter {
+			return "←→: switch pane • enter: edit • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q: quit"
+		}
+		return "↑↓: scroll • ←→: switch pane • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q: quit"
+	}
 }
 
 // paneWidths computes the inner content width (excluding the 2-column
@@ -1035,12 +1128,26 @@ const panePaddingOverhead = 2
 // 3 lines tall instead of 2 — the viewport was then sized 1 row too
 // tall for the space actually left under it, which is what clipped its
 // bottom border off at narrow terminal widths.
-// renderWelcomeScreen renders the first-launch screen shown in place of
-// the 3-pane layout when the config has no services yet. It's centered
-// in the same content area the panes would otherwise occupy, and
-// disappears the moment a service exists by any means — added by hand,
-// imported, or from a preset/stack.
-func (m Model) renderWelcomeScreen(width, height int) string {
+// welcomeButtons are the selectable actions on the welcome screen —
+// same actions as the 'a' / Ctrl+P / Ctrl+O shortcuts, offered here as
+// an actual navigable menu (arrows + Enter, or a mouse click) rather
+// than shortcut-only text, since not knowing the shortcuts yet is
+// exactly the situation someone's in on this screen.
+var welcomeButtons = []struct{ key, label string }{
+	{"a", "Add a single service"},
+	{"Ctrl+P", "Browse presets & stacks"},
+	{"Ctrl+O", "Import existing file"},
+}
+
+// buildWelcomeBox renders the welcome screen's box content (everything
+// inside the border) and, alongside it, the line offset within that
+// content where each button starts. renderWelcomeScreen and the mouse
+// click hit-test (see welcomeButtonAt) both call this rather than each
+// computing their own layout — a duplicated, independently-maintained
+// version of this math is exactly the kind of thing that quietly drifts
+// out of sync (see panePaddingOverhead's doc comment for the last time
+// that happened).
+func buildWelcomeBox(selected int) (box string, buttonOffsets []int) {
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorAccent).
@@ -1050,31 +1157,72 @@ func (m Model) renderWelcomeScreen(width, height int) string {
 		Foreground(colorSubtle).
 		Render("Build a docker-compose.yml in seconds")
 
-	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(colorTitle)
-	descStyle := lipgloss.NewStyle().Foreground(colorSubtle)
-
-	row := func(key, desc string) string {
-		return keyStyle.Render(fmt.Sprintf("%-8s", key)) + descStyle.Render(desc)
+	maxLen := 0
+	texts := make([]string, len(welcomeButtons))
+	for i, b := range welcomeButtons {
+		texts[i] = b.label + "  (" + b.key + ")"
+		if len(texts[i]) > maxLen {
+			maxLen = len(texts[i])
+		}
 	}
 
-	actionsBlock := lipgloss.JoinVertical(lipgloss.Left,
-		row("a", "add a single service"),
-		row("Ctrl+P", "browse presets and ready-made stacks"),
-		row("Ctrl+O", "import an existing docker-compose.yml"),
-	)
+	var buttons []string
+	for i, text := range texts {
+		text = fmt.Sprintf("%-*s", maxLen, text)
+
+		style := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(0, 2)
+		if i == selected {
+			style = style.BorderForeground(colorAccent).Bold(true).Foreground(colorAccent)
+		} else {
+			style = style.BorderForeground(colorMuted).Foreground(colorTitle)
+		}
+		buttons = append(buttons, style.Render(text))
+	}
 
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
-		Render("q to quit anytime")
+		Render("↑↓ to choose, Enter to select, or click — q to quit")
 
-	box := lipgloss.JoinVertical(lipgloss.Center,
-		title,
-		tagline,
-		"",
-		actionsBlock,
-		"",
-		hint,
-	)
+	// Build the ordered list of blocks and record each button's
+	// starting line offset as we go, before joining anything —
+	// JoinVertical only ever pads blocks horizontally to match the
+	// widest one, it never changes how many lines a block has, so
+	// offsets computed here stay correct after the join below.
+	parts := []string{title, tagline, ""}
+	buttonOffsets = make([]int, len(buttons))
+	for i, b := range buttons {
+		buttonOffsets[i] = countLines(parts)
+		parts = append(parts, b)
+		if i < len(buttons)-1 {
+			parts = append(parts, "")
+		}
+	}
+	parts = append(parts, "", hint)
+
+	box = lipgloss.JoinVertical(lipgloss.Center, parts...)
+	return box, buttonOffsets
+}
+
+// countLines returns the total number of lines the given blocks would
+// occupy if joined with "\n" — i.e. the line offset the NEXT block
+// would start at.
+func countLines(parts []string) int {
+	n := 0
+	for _, p := range parts {
+		n += lipglossHeight(p)
+	}
+	return n
+}
+
+// welcomeBoxed wraps buildWelcomeBox's content in the bordered,
+// padded, width-safe box actually shown on screen, and reports how
+// many rows the whole thing (border + padding + content) ends up
+// being — needed by both renderWelcomeScreen and welcomeButtonAt to
+// agree on where the box sits once centered.
+func welcomeBoxed(selected, width int) (rendered string, buttonOffsets []int, boxedHeight int) {
+	box, buttonOffsets := buildWelcomeBox(selected)
 
 	// The box stays at its natural (compact) size on any terminal wide
 	// enough for it — MaxWidth alone would have clipped raw bytes off
@@ -1103,14 +1251,89 @@ func (m Model) renderWelcomeScreen(width, height int) string {
 		contentBudget = maxContentBudget
 	}
 
-	boxed := lipgloss.NewStyle().
+	rendered = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorAccent).
 		Padding(1, 4).
 		Width(contentBudget + boxPadding).
 		Render(box)
 
+	return rendered, buttonOffsets, lipglossHeight(rendered)
+}
+
+// renderWelcomeScreen renders the first-launch screen shown in place of
+// the 3-pane layout when the config has no services yet. It's centered
+// in the same content area the panes would otherwise occupy, and
+// disappears the moment a service exists by any means — added by hand,
+// imported, or from a preset/stack.
+func (m Model) renderWelcomeScreen(width, height int) string {
+	boxed, _, _ := welcomeBoxed(m.welcomeSelected, width)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, boxed)
+}
+
+// welcomeButtonAt maps an absolute terminal row (as reported by a
+// tea.MouseMsg's Y) to a welcome-screen button index, or -1 if the row
+// isn't inside any button. Only the row is checked, not the column —
+// treating the whole terminal width as "close enough" to a button is a
+// deliberate simplification: it's far more forgiving to click than
+// requiring the cursor to land inside the button's exact horizontal
+// span, and there's nothing else on this screen a stray horizontal
+// click could be mistaken for.
+//
+// The vertical math mirrors lipgloss.PlaceVertical's own centering
+// (gap := height - contentHeight; split := round(gap * 0.5); top :=
+// gap - split) so this can never drift out of sync with where the box
+// actually renders — see buildWelcomeBox's doc comment for why that
+// matters.
+func welcomeButtonAt(m Model, row int) int {
+	headerHeight := lipglossHeight(m.renderHeader())
+	contentHeight := m.availableContentHeight()
+
+	_, buttonOffsets, boxedHeight := welcomeBoxed(m.welcomeSelected, m.width)
+
+	gap := contentHeight - boxedHeight
+	if gap < 0 {
+		gap = 0
+	}
+	split := int(math.Round(float64(gap) * 0.5))
+	topGap := gap - split
+
+	// +2 for the boxed style's own top border row and top padding row,
+	// which sit before buildWelcomeBox's content begins.
+	contentStartRow := headerHeight + topGap + 2
+
+	const buttonHeight = 3 // border + content + border
+	for i, offset := range buttonOffsets {
+		rowStart := contentStartRow + offset
+		rowEnd := rowStart + buttonHeight - 1
+		if row >= rowStart && row <= rowEnd {
+			return i
+		}
+	}
+	return -1
+}
+
+// activateWelcomeButton performs the action for one of the welcome
+// screen's 3 buttons — the same thing pressing 'a', Ctrl+P, or Ctrl+O
+// directly does, just reachable via Enter (or a click) on a
+// highlighted button too. Goes straight to opening the relevant
+// dialog rather than routing through the normal "a"/"ctrl+p"/"ctrl+o"
+// key handlers, since those gate on m.focus == paneLeft — a check that
+// doesn't mean anything on the welcome screen, where no pane is shown
+// at all.
+func (m Model) activateWelcomeButton(i int) (tea.Model, tea.Cmd) {
+	switch i {
+	case 0: // Add a single service
+		m.currentMode = modeAddService
+		m.addDialog = newAddServiceDialog()
+	case 1: // Browse presets & stacks
+		m.currentMode = modePresetPicker
+		m.presetPicker = newPresetPickerDialog()
+	case 2: // Import existing file
+		m.currentMode = modeImport
+		m.importDialog = newImportDialog()
+	}
+	return m, nil
 }
 
 func paneHeader(title string, width int) string {

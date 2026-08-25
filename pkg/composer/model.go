@@ -3,6 +3,8 @@
 // logic to marshal that model into a docker-compose.yml file.
 package composer
 
+import "gopkg.in/yaml.v3"
+
 // ComposeConfig represents the root Docker Compose structure.
 //
 // Services is kept as an ordered slice (ServiceEntry) rather than a bare
@@ -18,6 +20,14 @@ type ComposeConfig struct {
 	Services []ServiceEntry         `yaml:"-"`
 	Volumes  map[string]interface{} `yaml:"volumes,omitempty"`
 	Networks map[string]interface{} `yaml:"networks,omitempty"`
+	// Extra holds top-level fields this tool doesn't have an explicit
+	// field for — secrets:, configs:, name:, x-* extensions, and
+	// anything else the Compose spec has beyond version/services/
+	// volumes/networks. Captured verbatim on import (see ImportYAML)
+	// and re-emitted verbatim on export (see ExportYAML), so importing
+	// a real docker-compose.yml and saving it back never silently
+	// drops a top-level field the TUI doesn't happen to model.
+	Extra map[string]yaml.Node `yaml:"-"`
 }
 
 // ServiceEntry pairs a service name with its configuration, preserving
@@ -45,6 +55,17 @@ type ServiceConfig struct {
 	// these doesn't lose them on the next export.
 	User       string `yaml:"user,omitempty"`
 	Privileged bool   `yaml:"privileged,omitempty"`
+	// Extra holds service-level fields this tool doesn't have an
+	// explicit field for — command, entrypoint, networks,
+	// container_name, labels, env_file, working_dir, and the many other
+	// Compose spec keys beyond what the TUI's form can edit. Captured
+	// verbatim on import (see ImportYAML) and re-emitted verbatim on
+	// export (see ExportYAML). Editing a service through the TUI form
+	// only ever touches the named fields above; Extra is passed through
+	// untouched either way — this is what makes it safe to import an
+	// existing docker-compose.yml, edit one field through the form, and
+	// save it back without silently losing everything else in the file.
+	Extra map[string]yaml.Node `yaml:"-"`
 }
 
 // DependsOnEntry pairs a dependency's service name with its wait condition,

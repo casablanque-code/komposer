@@ -44,6 +44,18 @@ func (c *ComposeConfig) ExportYAML() ([]byte, error) {
 		appendKV(root, "networks", node)
 	}
 
+	// Re-emit any top-level fields this tool doesn't model explicitly
+	// (secrets:, configs:, name:, x-* extensions, ...) exactly as they
+	// came in on import — see ComposeConfig.Extra's doc comment. Map
+	// iteration order is random in Go, so these come out in whatever
+	// order happens to occur this run — acceptable, since the
+	// alternative (losing them outright) is far worse than not
+	// preserving their exact original position among each other.
+	for key, node := range c.Extra {
+		node := node
+		appendKV(root, key, &node)
+	}
+
 	doc := &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{root}}
 	return yaml.Marshal(doc)
 }
@@ -58,17 +70,27 @@ func serviceToNode(svc *ServiceConfig) (*yaml.Node, error) {
 		return nil, err
 	}
 
-	if len(svc.DependsOn) == 0 {
-		return base, nil
+	if len(svc.DependsOn) > 0 {
+		depNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		for _, dep := range svc.DependsOn {
+			condNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			appendKV(condNode, "condition", scalar(string(dep.Condition)))
+			appendKV(depNode, dep.Service, condNode)
+		}
+		appendKV(base, "depends_on", depNode)
 	}
 
-	depNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	for _, dep := range svc.DependsOn {
-		condNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		appendKV(condNode, "condition", scalar(string(dep.Condition)))
-		appendKV(depNode, dep.Service, condNode)
+	// Re-emit any service-level fields this tool doesn't model
+	// explicitly (command, networks, container_name, labels, env_file,
+	// ...) exactly as they came in on import — see
+	// ServiceConfig.Extra's doc comment. Without this, importing a real
+	// docker-compose.yml and saving it back through the TUI would
+	// silently drop every field the form doesn't know about, even ones
+	// the user never touched.
+	for key, node := range svc.Extra {
+		node := node
+		appendKV(base, key, &node)
 	}
-	appendKV(base, "depends_on", depNode)
 
 	return base, nil
 }

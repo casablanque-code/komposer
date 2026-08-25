@@ -404,15 +404,64 @@ func (m Model) renderValidationDialog() string {
 
 	body := strings.Join(sections, "\n")
 
+	// Window the body to whatever room is actually available, the same
+	// windowing approach used by the preset/stack picker and the
+	// services list — otherwise a config with enough services and
+	// warnings to fill more than one screen just grew the dialog past
+	// the terminal's height with nothing to scroll it, pushing content
+	// (and the box's own bottom border) off-screen. Splitting the
+	// ALREADY-rendered body by "\n" (rather than windowing by logical
+	// section) matters because a single warning can wrap onto more than
+	// one physical line at dialogContentWidth — windowing pre-wrap would
+	// undercount how many screen rows a long message actually takes.
+	bodyLines := strings.Split(body, "\n")
+
+	// Fixed chrome around the body: border(2) + Padding(1,2)(2) +
+	// title+blank(2) + blank+hint(2) = 8 rows not available to the body.
+	const dialogChrome = 8
+	visible := m.height - dialogChrome
+	if visible < 3 {
+		visible = 3
+	}
+
+	scroll := m.validationDialog.scroll
+	if scroll > len(bodyLines)-visible {
+		scroll = len(bodyLines) - visible
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+
+	var windowed []string
+	if scroll > 0 {
+		windowed = append(windowed, lipgloss.NewStyle().
+			Foreground(colorSubtle).
+			Width(w).
+			Render(fmt.Sprintf("^ %d more above", scroll)))
+	}
+	end := scroll + visible
+	if end > len(bodyLines) {
+		end = len(bodyLines)
+	}
+	windowed = append(windowed, bodyLines[scroll:end]...)
+	if remaining := len(bodyLines) - end; remaining > 0 {
+		windowed = append(windowed, lipgloss.NewStyle().
+			Foreground(colorSubtle).
+			Width(w).
+			Render(fmt.Sprintf("v %d more below", remaining)))
+	}
+
+	windowedBody := strings.Join(windowed, "\n")
+
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
 		Width(w).
-		Render("Esc: close")
+		Render("↑↓: scroll • Esc: close")
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
-		body,
+		windowedBody,
 		"",
 		hint,
 	)
