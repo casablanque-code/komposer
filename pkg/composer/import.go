@@ -7,16 +7,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// knownServiceKeys are the YAML keys ServiceConfig has an explicit,
-// form-editable field for. Anything else found on a service during
-// import goes into ServiceConfig.Extra instead of being silently
-// dropped.
-var knownServiceKeys = map[string]bool{
-	"image": true, "build": true, "ports": true, "environment": true,
-	"volumes": true, "depends_on": true, "healthcheck": true,
-	"restart": true, "user": true, "privileged": true,
-}
-
 // ImportYAML reads a docker-compose.yml file and parses it into a
 // ComposeConfig.
 //
@@ -116,39 +106,171 @@ func parseService(node *yaml.Node) (*ServiceConfig, error) {
 		return svc, nil
 	}
 
-	// Populates every field with a standard yaml tag (image, build,
-	// ports, environment, volumes, healthcheck, restart, user,
-	// privileged) in one pass. depends_on is tagged yaml:"-" on the
-	// struct — see parseDependsOn below for why it needs separate
-	// handling — so this step correctly leaves it alone.
-	if err := node.Decode(svc); err != nil {
-		return nil, err
-	}
-
+	// Every known key below is decoded individually, on its own node,
+	// instead of the previous single node.Decode(svc) covering every
+	// standard-tagged field in one pass. That one-shot decode assumed
+	// every real-world file would use exactly the shape each Go field
+	// declares — e.g. `ports`/`volumes` as a plain string list and
+	// `environment` as a list, never a mapping — which the Compose
+	// spec does not actually guarantee: `environment: {KEY: value}`
+	// (mapping form), long-syntax `ports`/`volumes` entries (mappings
+	// with target/published/source keys), and a mapping-form `build`
+	// are all valid and common. Any one of them being present made
+	// node.Decode(svc) fail with a type-mismatch error that aborted
+	// the *entire* import — turning "this tool doesn't have a field
+	// for that shape" into "this file won't open at all". Decoding
+	// key-by-key means a shape mismatch on one field can fall back to
+	// Extra (preserved verbatim, same as any other unmodeled key)
+	// without taking the rest of a perfectly valid file down with it.
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		key := node.Content[i].Value
 		valueNode := node.Content[i+1]
 
-		switch {
-		case key == "depends_on":
+		switch key {
+		case "image":
+			svc.Image = valueNode.Value
+
+		case "build":
+			// Short form only (`build: ./dir`); the long mapping form
+			// (`build: {context: ..., dockerfile: ...}`) has no form
+			// field, so it round-trips through Extra instead.
+			if valueNode.Kind == yaml.ScalarNode {
+				svc.Build = valueNode.Value
+			} else {
+				setExtra(svc, "build", valueNode)
+			}
+
+		case "ports":
+			if list, ok := decodeScalarList(valueNode); ok {
+				svc.Ports = list
+			} else {
+				// Long syntax (list of target/published/protocol
+				// mappings) — preserved verbatim via Extra.
+				setExtra(svc, "ports", valueNode)
+			}
+
+		case "volumes":
+			if list, ok := decodeScalarList(valueNode); ok {
+				svc.Volumes = list
+			} else {
+				// Long syntax (list of type/source/target mappings)
+				// — preserved verbatim via Extra.
+				setExtra(svc, "volumes", valueNode)
+			}
+
+		case "environment":
+			env, err := parseEnvironment(valueNode)
+			if err != nil {
+				return nil, fmt.Errorf("environment: %w", err)
+			}
+			svc.Environment = env
+
+		case "depends_on":
 			deps, err := parseDependsOn(valueNode)
 			if err != nil {
 				return nil, fmt.Errorf("depends_on: %w", err)
 			}
 			svc.DependsOn = deps
 
-		case knownServiceKeys[key]:
-			// Already populated by node.Decode(svc) above.
+		case "healthcheck":
+			var hc HealthCheck
+			if valueNode.Kind == yaml.MappingNode && valueNode.Decode(&hc) == nil {
+				svc.HealthCheck = &hc
+			} else {
+				// Covers both a non-mapping healthcheck block and a
+				// `test:` given as its (also valid) plain-string
+				// shorthand rather than a list — neither has a form
+				// field, so both round-trip through Extra.
+				setExtra(svc, "healthcheck", valueNode)
+			}
+
+		case "restart":
+			svc.Restart = valueNode.Value
+
+		case "user":
+			svc.User = valueNode.Value
+
+		case "privileged":
+			var b bool
+			if valueNode.Decode(&b) == nil {
+				svc.Privileged = b
+			}
 
 		default:
-			if svc.Extra == nil {
-				svc.Extra = make(map[string]yaml.Node)
-			}
-			svc.Extra[key] = *valueNode
+			setExtra(svc, key, valueNode)
 		}
 	}
 
 	return svc, nil
+}
+
+// decodeScalarList decodes a YAML sequence of plain scalars (the
+// docker-compose "short syntax" used by ports/volumes) into a []string.
+// Reports false — without error — for anything else, so the caller can
+// fall back to preserving the node verbatim instead of failing the
+// import outright; see parseService.
+func decodeScalarList(node *yaml.Node) ([]string, bool) {
+	if node.Kind != yaml.SequenceNode {
+		return nil, false
+	}
+	out := make([]string, 0, len(node.Content))
+	for _, item := range node.Content {
+		if item.Kind != yaml.ScalarNode {
+			return nil, false
+		}
+		out = append(out, item.Value)
+	}
+	return out, true
+}
+
+// setExtra records a raw, unmodeled service-level key so it survives
+// round-tripping through ExportYAML untouched.
+func setExtra(svc *ServiceConfig, key string, node *yaml.Node) {
+	if svc.Extra == nil {
+		svc.Extra = make(map[string]yaml.Node)
+	}
+	svc.Extra[key] = *node
+}
+
+// parseEnvironment supports both docker-compose `environment` forms:
+// the list form ("environment: [FOO=bar]") and the mapping form
+// ("environment: {FOO: bar}"), normalizing the latter into the same
+// "KEY=value" list form so it's editable through the same form field
+// either way. A mapping value of null (docker-compose's shorthand for
+// "pass this variable through from the host environment", e.g.
+// `environment: {FOO:}`) becomes a bare "FOO" entry, matching how
+// docker compose itself treats that shorthand.
+//
+// Previously `environment` was decoded as a plain []string via the
+// blanket struct decode in parseService, which errored out — aborting
+// the whole import — the moment it hit the mapping form, even though
+// the mapping form is equally valid Compose YAML and arguably more
+// common than the list form in hand-written files.
+func parseEnvironment(node *yaml.Node) ([]string, error) {
+	switch node.Kind {
+	case yaml.SequenceNode:
+		var list []string
+		if err := node.Decode(&list); err != nil {
+			return nil, err
+		}
+		return list, nil
+
+	case yaml.MappingNode:
+		var out []string
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key := node.Content[i].Value
+			val := node.Content[i+1]
+			if val.Tag == "!!null" || val.Value == "" {
+				out = append(out, key)
+			} else {
+				out = append(out, key+"="+val.Value)
+			}
+		}
+		return out, nil
+
+	default:
+		return nil, fmt.Errorf("expected a list or mapping")
+	}
 }
 
 // parseDependsOn supports both docker-compose depends_on forms: the
