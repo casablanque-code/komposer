@@ -567,12 +567,12 @@ func (m Model) renderImportDialog() string {
 		Bold(true).
 		Foreground(colorTitle).
 		Width(w).
-		Render("Import docker-compose.yml")
+		Render("Import compose.yaml")
 
 	prompt := lipgloss.NewStyle().
 		Foreground(colorSubtle).
 		Width(w).
-		Render("Enter path to docker-compose.yml:")
+		Render("Enter path to compose.yaml (or docker-compose.yml):")
 
 	input := m.importDialog.pathInput.View()
 
@@ -605,7 +605,7 @@ func (m Model) renderSaveAsDialog() string {
 		return m.renderOverwriteConfirmDialog(w)
 	}
 
-	titleText := "Save docker-compose.yml"
+	titleText := "Save compose.yaml"
 	borderColor := colorAccent
 	var prompt string
 	var hint string

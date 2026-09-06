@@ -486,7 +486,7 @@ func (m Model) updateSaveAs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		path := strings.TrimSpace(m.saveAsDialog.pathInput.Value())
 		if path == "" {
-			path = "docker-compose.yml"
+			path = "compose.yaml"
 		}
 		if _, err := os.Stat(path); err == nil {
 			m.saveAsDialog.confirmingOverwrite = true
@@ -1170,7 +1170,7 @@ func buildWelcomeBox(selected int) (box string, buttonOffsets []int) {
 
 	tagline := lipgloss.NewStyle().
 		Foreground(colorSubtle).
-		Render("Build a docker-compose.yml in seconds")
+		Render("Build a compose.yaml in seconds")
 
 	maxLen := 0
 	texts := make([]string, len(welcomeButtons))
@@ -1512,7 +1512,7 @@ func (m Model) renderCenterPane(width, height int) string {
 func (m Model) renderRightPane(width, height int) string {
 	body := m.previewBody()
 
-	header := paneHeader("Preview: docker-compose.yml", width)
+	header := paneHeader("Preview: compose.yaml", width)
 
 	// Use viewport for scrollable content when ready
 	var content string

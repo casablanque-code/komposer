@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/casablanque-code/komposer/actions/workflows/ci.yml/badge.svg)](https://github.com/casablanque-code/komposer/actions/workflows/ci.yml)
 
-A terminal UI for putting together a `docker-compose.yml` fast — either
+A terminal UI for putting together a `compose.yaml` fast — either
 service by service, or as a ready-made multi-service stack (a database
 plus its admin UI, a blog platform plus its database, and so on) in a
 single keystroke. Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea)
@@ -13,7 +13,7 @@ common Docker footguns: ports quietly published on every network
 interface, an empty or hardcoded secret, a database with no volume
 (so its data disappears the moment the container is recreated).
 
-It's also safe to use as a viewer/editor on a `docker-compose.yml` you
+It's also safe to use as a viewer/editor on a `compose.yaml` (or `docker-compose.yml`) you
 already have. Import keeps every field verbatim, including ones this
 tool's form can't edit (`command`, `networks`, `container_name`,
 `labels`, `env_file`, `secrets`, `x-*` extensions, and so on) — editing
@@ -55,14 +55,14 @@ file.
 
   Warnings never block saving — they're advisory, shown separately
   from hard errors.
-- **Import** (`Ctrl+O`) an existing `docker-compose.yml` — parses the
+- **Import** (`Ctrl+O`) an existing `compose.yaml` or `docker-compose.yml` — parses the
   raw YAML tree rather than a fixed struct, so any field this tool
   doesn't have explicit support for is captured and re-emitted
   untouched on export instead of being silently dropped. Both
   `depends_on` forms (short list and long map-with-condition) are
   understood.
 - **Explicit save** (`Ctrl+S`) — prompts for a path (defaulting to
-  `docker-compose.yml`) and asks before overwriting an existing file.
+  `compose.yaml`) and asks before overwriting an existing file.
   If you quit (`q`) with unsaved changes, you get the same prompt
   instead of losing them silently.
 - **Editing a service**: Esc discards your edits (asking for
@@ -172,13 +172,13 @@ with `go run .` instead, if you'd rather not produce a binary.
 |---|---|
 | `Ctrl+P` | open the preset/stack picker — `←`/`→` switches between the **Presets** and **Stacks** tabs, `↑`/`↓` navigates, `Enter` adds the selection |
 | `Ctrl+V` | run validation — shows errors and warnings for the current config, scrollable with `↑`/`↓` or the mouse wheel |
-| `Ctrl+O` | import an existing `docker-compose.yml` |
+| `Ctrl+O` | import an existing `compose.yaml` or `docker-compose.yml` |
 
 ### Saving and quitting
 
 | Key | Action |
 |---|---|
-| `Ctrl+S` | save — prompts for a path (default `docker-compose.yml`), asks before overwriting an existing file |
+| `Ctrl+S` | save — prompts for a path (default `compose.yaml`), asks before overwriting an existing file |
 | `q` | quit — if there are unsaved changes, opens the same save prompt with an explicit "quit without saving" option; quits immediately otherwise |
 | `Ctrl+C` | quit immediately, no prompt |
 

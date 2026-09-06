@@ -86,7 +86,7 @@ type importDialog struct {
 
 func newImportDialog() importDialog {
 	ti := textinput.New()
-	ti.Placeholder = "docker-compose.yml"
+	ti.Placeholder = "compose.yaml"
 	ti.Focus()
 	ti.CharLimit = 256
 	ti.Width = 50
@@ -110,8 +110,8 @@ type saveAsDialog struct {
 
 func newSaveAsDialog(quitAfterSave bool) saveAsDialog {
 	ti := textinput.New()
-	ti.Placeholder = "docker-compose.yml"
-	ti.SetValue("docker-compose.yml")
+	ti.Placeholder = "compose.yaml"
+	ti.SetValue("compose.yaml")
 	ti.Focus()
 	ti.CursorEnd()
 	ti.CharLimit = 256
