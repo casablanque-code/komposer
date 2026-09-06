@@ -468,11 +468,27 @@ func (m Model) buildValidationBodyLines() []string {
 			Width(w).
 			Render(fmt.Sprintf("Warnings (%d) - valid, but worth a look:", len(m.validationDialog.warnings)))
 		sections = append(sections, warnHeader)
-		for _, warning := range m.validationDialog.warnings {
-			sections = append(sections, lipgloss.NewStyle().
-				Foreground(colorWarning).
-				Width(w).
-				Render("• "+warning))
+
+		// selectedIdx is which warning (if any) secretItems()/secretCursor
+		// currently points at — the one Enter would open the strategy
+		// picker for. Rendered with its own bullet/style so it's clear
+		// which warning "enter: convert" in the hint refers to; other
+		// fixable warnings aren't otherwise marked (tab cycles through
+		// them to find them, rather than marking every one at once and
+		// risking it read as a checklist).
+		selectedIdx := -1
+		if items := m.validationDialog.secretItems(); len(items) > 0 {
+			selectedIdx = items[m.validationDialog.secretCursor]
+		}
+
+		for i, warning := range m.validationDialog.warnings {
+			bullet := "• "
+			style := lipgloss.NewStyle().Foreground(colorWarning).Width(w)
+			if i == selectedIdx {
+				bullet = "▸ "
+				style = lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Width(w)
+			}
+			sections = append(sections, style.Render(bullet+warning))
 		}
 	}
 
@@ -565,15 +581,33 @@ func (m Model) renderValidationDialog() string {
 
 	windowedBody := strings.Join(windowed, "\n")
 
+	var banner string
+	if m.validationDialog.actionMessage != "" {
+		bannerColor := colorSuccess
+		prefix := "[OK] "
+		if m.validationDialog.actionMessageErr {
+			bannerColor = colorDanger
+			prefix = "[ERROR] "
+		}
+		banner = lipgloss.NewStyle().
+			Foreground(bannerColor).
+			Width(w).
+			Render(prefix+m.validationDialog.actionMessage) + "\n\n"
+	}
+
+	hintText := "↑↓: scroll • Esc: close"
+	if len(m.validationDialog.secretItems()) > 0 {
+		hintText = "↑↓: scroll • Tab: next secret • Enter: convert selected • Esc: close"
+	}
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
 		Width(w).
-		Render("↑↓: scroll • Esc: close")
+		Render(hintText)
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
-		windowedBody,
+		banner+windowedBody,
 		"",
 		hint,
 	)

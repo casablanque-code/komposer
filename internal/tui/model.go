@@ -56,6 +56,7 @@ type Model struct {
 	confirmDelete    confirmDeleteDialog
 	presetPicker     presetPickerDialog
 	validationDialog validationDialog
+	secretStrategy   secretStrategyDialog
 	importDialog     importDialog
 	saveAsDialog     saveAsDialog
 
@@ -197,6 +198,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case secretActionResult:
+		// Deliberately doesn't change m.currentMode — applying a
+		// conversion happens from inside the validation dialog and
+		// should leave the user right back in it, just refreshed,
+		// rather than bouncing them out to the normal view the way
+		// saveResult does for modeSaved.
+		m.showValidation()
+		if msg.err != nil {
+			m.validationDialog.actionMessage = msg.err.Error()
+			m.validationDialog.actionMessageErr = true
+		} else {
+			m.validationDialog.actionMessage = msg.message
+			m.validationDialog.actionMessageErr = false
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -307,6 +324,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateImport(msg)
 		case modeSaveAs:
 			return m.updateSaveAs(msg)
+		case modeSecretStrategy:
+			return m.updateSecretStrategy(msg)
 		}
 
 		// Normal mode keys
@@ -666,8 +685,40 @@ func (m Model) updateEditField(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // updateValidation handles input in the validation dialog.
 func (m Model) updateValidation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "enter":
+	case "esc":
 		m.currentMode = modeNormal
+		return m, nil
+
+	case "enter":
+		// With no fixable secret selected, Enter just closes the
+		// dialog — same as it always has. With one selected, it opens
+		// the strategy picker for it instead, so Enter stays "the
+		// obvious thing to press" either way rather than needing a
+		// separate key the user has to discover.
+		items := m.validationDialog.secretItems()
+		if len(items) == 0 {
+			m.currentMode = modeNormal
+			return m, nil
+		}
+		ref := m.validationDialog.secretRefs[items[m.validationDialog.secretCursor]]
+		m.secretStrategy = newSecretStrategyDialog(ref.Service, ref.Key, ref.Empty)
+		m.currentMode = modeSecretStrategy
+		return m, nil
+
+	case "tab":
+		items := m.validationDialog.secretItems()
+		if len(items) == 0 {
+			return m, nil
+		}
+		m.validationDialog.secretCursor = (m.validationDialog.secretCursor + 1) % len(items)
+		return m, nil
+
+	case "shift+tab":
+		items := m.validationDialog.secretItems()
+		if len(items) == 0 {
+			return m, nil
+		}
+		m.validationDialog.secretCursor = (m.validationDialog.secretCursor - 1 + len(items)) % len(items)
 		return m, nil
 
 	case "up", "k":
@@ -692,6 +743,33 @@ func (m Model) updateValidation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "pgdown":
 		m.validationDialog.scroll = m.clampedValidationScroll(m.validationDialog.scroll + 10)
 		return m, nil
+	}
+	return m, nil
+}
+
+// updateSecretStrategy handles input in the "how should this secret be
+// stored" picker opened from the validation dialog.
+func (m Model) updateSecretStrategy(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.currentMode = modeValidation
+		return m, nil
+
+	case "up", "k":
+		m.secretStrategy.selected = (m.secretStrategy.selected - 1 + 3) % 3
+		return m, nil
+
+	case "down", "j":
+		m.secretStrategy.selected = (m.secretStrategy.selected + 1) % 3
+		return m, nil
+
+	case "enter":
+		service, key, strategy := m.secretStrategy.service, m.secretStrategy.key, m.secretStrategy.selected
+		m.currentMode = modeValidation
+		if strategy == 2 { // "keep as is" — nothing to do
+			return m, nil
+		}
+		return m, m.convertSecretCmd(service, key, strategy)
 	}
 	return m, nil
 }
@@ -732,9 +810,38 @@ func (m *Model) showValidation() {
 		errors = append(errors, err.Error())
 	}
 
+	// hardcoded is keyed by "service\x00key" so each warning can be
+	// matched back to the specific HardcodedSecret it came from —
+	// Validate()'s warnings are plain strings with no such link, but
+	// FindHardcodedSecrets() runs the exact same classifySecretEnv
+	// check in the exact same per-service, per-env order, so the i-th
+	// "service has a secret-shaped env var" match here is the i-th
+	// warning() with Service==service && Field=="environment" whose
+	// message starts with that key's quoted name.
+	hardcoded := m.config.FindHardcodedSecrets()
+	hcIdx := 0
+
 	var warnings []string
+	var secretRefs []*composer.HardcodedSecret
 	for _, w := range result.Warnings {
 		warnings = append(warnings, w.Error())
+		var ref *composer.HardcodedSecret
+		if w.Field == "environment" && hcIdx < len(hardcoded) && hardcoded[hcIdx].Service == w.Service {
+			// classifySecretEnv's message always leads with the
+			// quoted key name (see validate.go), so matching that
+			// against the next unmatched hardcoded-secret for this
+			// service confirms it's the same entry rather than the
+			// Postgres-specific "no POSTGRES_PASSWORD set at all"
+			// warning, which also uses Field=="environment" but has
+			// no existing env entry to convert.
+			quoted := "'" + hardcoded[hcIdx].Key + "'"
+			if strings.Contains(w.Message, quoted) {
+				h := hardcoded[hcIdx]
+				ref = &h
+				hcIdx++
+			}
+		}
+		secretRefs = append(secretRefs, ref)
 	}
 
 	// Compose Spec conformance is checked independently of the rules
@@ -752,6 +859,7 @@ func (m *Model) showValidation() {
 	m.validationDialog = validationDialog{
 		errors:     errors,
 		warnings:   warnings,
+		secretRefs: secretRefs,
 		specValid:  specResult.Valid,
 		specIssues: specResult.Issues,
 		scroll:     0,
@@ -817,6 +925,8 @@ func (m Model) View() string {
 		return m.renderImportDialog()
 	case modeSaveAs:
 		return m.renderSaveAsDialog()
+	case modeSecretStrategy:
+		return m.renderSecretStrategyDialog()
 	}
 
 	// Normal view rendering
@@ -1063,7 +1173,12 @@ func (m Model) normalHelpText() string {
 		}
 		return "enter: confirm • esc: back"
 	case modeValidation:
+		if len(m.validationDialog.secretItems()) > 0 {
+			return "↑↓: scroll • tab: next secret • enter: convert selected • esc: close"
+		}
 		return "↑↓: scroll • esc: close"
+	case modeSecretStrategy:
+		return "↑↓: choose • enter: confirm • esc: back"
 	case modeImport:
 		return "enter: import • esc: cancel"
 	case modeSaveAs:
