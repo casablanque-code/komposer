@@ -77,7 +77,14 @@ type saveResult struct {
 type validationDialog struct {
 	errors   []string
 	warnings []string
-	scroll   int
+	// specValid and specIssues hold the result of checking the
+	// rendered document against the official Compose Specification
+	// JSON Schema — see ComposeConfig.ValidateAgainstSpec. This is a
+	// separate question from errors/warnings above, which are
+	// komposer's own opinionated checks, not the Compose Spec itself.
+	specValid  bool
+	specIssues []string
+	scroll     int
 }
 
 type importDialog struct {

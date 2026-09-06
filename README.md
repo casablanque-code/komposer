@@ -43,15 +43,21 @@ file.
   Portainer + Watchtower). If a stack's default service name is
   already taken, it's renamed automatically (`db` → `db-2`) rather
   than refusing or silently overwriting anything.
-- **Validation** (`Ctrl+V`, scrollable) — checks required fields, port
-  formats, restart policies, and `depends_on` references, and
-  separately flags non-blocking advisory warnings:
-  - a port published on every network interface (Docker's default)
-    with a suggested `127.0.0.1:...` fix,
-  - an environment variable that looks like a secret (by name) with an
-    empty or hardcoded value,
-  - a recognized database/stateful image with no volume configured,
-  - Postgres published on the network with no `POSTGRES_PASSWORD` set.
+- **Validation** (`Ctrl+V`, scrollable) — three separate reports, so
+  "komposer thinks this is risky" and "Docker Compose would reject
+  this outright" never get confused with one another:
+  - **Errors** — komposer's own required-field, port-format,
+    restart-policy, and `depends_on`-reference checks,
+  - **Warnings** — non-blocking advisories: a port published on every
+    network interface (Docker's default) with a suggested
+    `127.0.0.1:...` fix, an environment variable that looks like a
+    secret (by name) with an empty or hardcoded value, a recognized
+    database/stateful image with no volume configured, Postgres
+    published on the network with no `POSTGRES_PASSWORD` set,
+  - **Compose specification** — checked against the official
+    [Compose Specification JSON Schema](https://github.com/compose-spec/compose-spec/blob/master/schema/compose-spec.json)
+    (vendored under `pkg/composer/schema/`), independent of the two
+    checks above.
 
   Warnings never block saving — they're advisory, shown separately
   from hard errors.

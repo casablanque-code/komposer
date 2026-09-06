@@ -436,7 +436,7 @@ func (m Model) buildValidationBodyLines() []string {
 
 	var sections []string
 
-	if len(m.validationDialog.errors) == 0 && len(m.validationDialog.warnings) == 0 {
+	if len(m.validationDialog.errors) == 0 && len(m.validationDialog.warnings) == 0 && m.validationDialog.specValid {
 		sections = append(sections, lipgloss.NewStyle().
 			Foreground(colorSuccess).
 			Width(w).
@@ -473,6 +473,35 @@ func (m Model) buildValidationBodyLines() []string {
 				Foreground(colorWarning).
 				Width(w).
 				Render("• "+warning))
+		}
+	}
+
+	// Compose Specification conformance is its own section, checked
+	// against the official schema (see ComposeConfig.ValidateAgainstSpec)
+	// rather than komposer's own rules above — deliberately kept apart
+	// so "komposer thinks this is risky" and "Docker Compose would
+	// reject this outright" never get confused with one another.
+	if len(sections) > 0 {
+		sections = append(sections, "")
+	}
+	if m.validationDialog.specValid {
+		sections = append(sections, lipgloss.NewStyle().
+			Bold(true).
+			Foreground(colorSuccess).
+			Width(w).
+			Render("✓ Compose specification: valid"))
+	} else {
+		specHeader := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(colorDanger).
+			Width(w).
+			Render(fmt.Sprintf("✗ Compose specification (%d) - does not conform:", len(m.validationDialog.specIssues)))
+		sections = append(sections, specHeader)
+		for _, issue := range m.validationDialog.specIssues {
+			sections = append(sections, lipgloss.NewStyle().
+				Foreground(colorDanger).
+				Width(w).
+				Render("• "+issue))
 		}
 	}
 
@@ -551,7 +580,7 @@ func (m Model) renderValidationDialog() string {
 
 	borderColor := colorSuccess
 	switch {
-	case len(m.validationDialog.errors) > 0:
+	case len(m.validationDialog.errors) > 0, !m.validationDialog.specValid:
 		borderColor = colorDanger
 	case len(m.validationDialog.warnings) > 0:
 		borderColor = colorWarning

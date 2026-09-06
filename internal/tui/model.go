@@ -737,10 +737,24 @@ func (m *Model) showValidation() {
 		warnings = append(warnings, w.Error())
 	}
 
+	// Compose Spec conformance is checked independently of the rules
+	// above: it answers "would Docker Compose itself accept this
+	// document's shape", not "does it follow komposer's own advice".
+	// A rendering failure here (e.g. an empty config) just means
+	// there's nothing yet to check — that's already covered by the
+	// "at least one service is required" error above, so it's not
+	// worth a separate error message.
+	specResult, specErr := m.config.ValidateAgainstSpec()
+	if specErr != nil {
+		specResult = composer.SpecValidationResult{Valid: true}
+	}
+
 	m.validationDialog = validationDialog{
-		errors:   errors,
-		warnings: warnings,
-		scroll:   0,
+		errors:     errors,
+		warnings:   warnings,
+		specValid:  specResult.Valid,
+		specIssues: specResult.Issues,
+		scroll:     0,
 	}
 	m.currentMode = modeValidation
 }
