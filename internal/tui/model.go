@@ -711,6 +711,7 @@ func (m Model) updateValidation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.validationDialog.secretCursor = (m.validationDialog.secretCursor + 1) % len(items)
+		m.validationDialog.scroll = m.ensureValidationLineVisible(m.selectedWarningLine())
 		return m, nil
 
 	case "shift+tab":
@@ -719,6 +720,7 @@ func (m Model) updateValidation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.validationDialog.secretCursor = (m.validationDialog.secretCursor - 1 + len(items)) % len(items)
+		m.validationDialog.scroll = m.ensureValidationLineVisible(m.selectedWarningLine())
 		return m, nil
 
 	case "up", "k":
@@ -799,6 +801,23 @@ func (m Model) updateImport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	m.importDialog.pathInput, cmd = m.importDialog.pathInput.Update(msg)
 	return m, cmd
+}
+
+// selectedWarningLine returns the body-line offset (see
+// buildValidationBodyLines) of the warning secretItems()/secretCursor
+// currently points at, or 0 if there isn't one — used to scroll it
+// into view after Tab/Shift+Tab (see ensureValidationLineVisible).
+func (m Model) selectedWarningLine() int {
+	items := m.validationDialog.secretItems()
+	if len(items) == 0 {
+		return 0
+	}
+	_, offsets := m.buildValidationBodyLines()
+	idx := items[m.validationDialog.secretCursor]
+	if idx < len(offsets) {
+		return offsets[idx]
+	}
+	return 0
 }
 
 // showValidation runs validation and displays results in a dialog.

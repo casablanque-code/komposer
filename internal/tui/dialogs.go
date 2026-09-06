@@ -422,22 +422,52 @@ func (m Model) validationScrollWindow(scroll, bodyLineCount int) (clamped, bodyB
 	return scroll, bodyBudget, showAbove, showBelow
 }
 
-// buildValidationBodyLines renders the errors/warnings report at the
-// dialog's content width and splits it into individual screen rows
-// (post-wrap). Shared between renderValidationDialog and
-// validationScrollWindow's callers so scrolling and rendering always
-// agree on exactly how many rows the report takes — splitting the
-// ALREADY-rendered body by "\n" (rather than windowing by logical
-// section) matters because a single warning can wrap onto more than
-// one physical line at dialogContentWidth, and windowing pre-wrap would
-// undercount how many screen rows a long message actually takes.
-func (m Model) buildValidationBodyLines() []string {
-	w := dialogContentWidth(m.width)
+// validationDialogContentWidth is dialogContentWidth's preferred width,
+// doubled, specifically for the validation report: unlike every other
+// dialog (short prompts, single fields), it routinely carries long
+// single-line messages — file paths, image names, JSON-pointer-style
+// schema error locations — that wrap awkwardly and read cramped at the
+// standard 60-column width every other dialog uses.
+func validationDialogContentWidth(termWidth int) int {
+	const preferred = 120
+	const padding = 4 // 2 chars padding on each side
+	const border = 2  // 1 char border on each side
+
+	maxContent := termWidth - padding - border
+	if maxContent < 20 {
+		return 20
+	}
+	if preferred < maxContent {
+		return preferred
+	}
+	return maxContent
+}
+
+// buildValidationBodyLines renders the validation report body and also
+// returns, for each warning (indexed the same as
+// m.validationDialog.warnings), the line index within the returned
+// slice where that warning's rendered block starts — used by
+// updateValidation to scroll a newly tab-selected warning into view
+// rather than leaving it to potentially render off-screen.
+func (m Model) buildValidationBodyLines() ([]string, []int) {
+	w := validationDialogContentWidth(m.width)
 
 	var sections []string
+	// lineCount tracks how many lines `sections` amounts to so far —
+	// strings.Join(sections, "\n") then strings.Split(..., "\n") is
+	// exactly len(sections) - 1 separator newlines plus each section's
+	// own internal newlines (from lipgloss wrapping a long line), so
+	// appending strings.Count(s, "\n")+1 per section keeps this in
+	// sync with the real thing without re-joining/re-splitting on
+	// every append just to count.
+	lineCount := 0
+	appendSection := func(s string) {
+		sections = append(sections, s)
+		lineCount += strings.Count(s, "\n") + 1
+	}
 
 	if len(m.validationDialog.errors) == 0 && len(m.validationDialog.warnings) == 0 && m.validationDialog.specValid {
-		sections = append(sections, lipgloss.NewStyle().
+		appendSection(lipgloss.NewStyle().
 			Foreground(colorSuccess).
 			Width(w).
 			Render("[OK] All checks passed!"))
@@ -449,25 +479,26 @@ func (m Model) buildValidationBodyLines() []string {
 			Foreground(colorDanger).
 			Width(w).
 			Render(fmt.Sprintf("Errors (%d) - must fix before this is valid compose:", len(m.validationDialog.errors)))
-		sections = append(sections, errHeader)
+		appendSection(errHeader)
 		for _, err := range m.validationDialog.errors {
-			sections = append(sections, lipgloss.NewStyle().
+			appendSection(lipgloss.NewStyle().
 				Foreground(colorDanger).
 				Width(w).
-				Render("• "+err))
+				Render("• " + err))
 		}
 	}
 
+	var warningLineOffsets []int
 	if len(m.validationDialog.warnings) > 0 {
 		if len(sections) > 0 {
-			sections = append(sections, "")
+			appendSection("")
 		}
 		warnHeader := lipgloss.NewStyle().
 			Bold(true).
 			Foreground(colorWarning).
 			Width(w).
 			Render(fmt.Sprintf("Warnings (%d) - valid, but worth a look:", len(m.validationDialog.warnings)))
-		sections = append(sections, warnHeader)
+		appendSection(warnHeader)
 
 		// selectedIdx is which warning (if any) secretItems()/secretCursor
 		// currently points at — the one Enter would open the strategy
@@ -481,14 +512,16 @@ func (m Model) buildValidationBodyLines() []string {
 			selectedIdx = items[m.validationDialog.secretCursor]
 		}
 
+		warningLineOffsets = make([]int, len(m.validationDialog.warnings))
 		for i, warning := range m.validationDialog.warnings {
+			warningLineOffsets[i] = lineCount
 			bullet := "• "
 			style := lipgloss.NewStyle().Foreground(colorWarning).Width(w)
 			if i == selectedIdx {
 				bullet = "▸ "
 				style = lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Width(w)
 			}
-			sections = append(sections, style.Render(bullet+warning))
+			appendSection(style.Render(bullet + warning))
 		}
 	}
 
@@ -498,10 +531,10 @@ func (m Model) buildValidationBodyLines() []string {
 	// so "komposer thinks this is risky" and "Docker Compose would
 	// reject this outright" never get confused with one another.
 	if len(sections) > 0 {
-		sections = append(sections, "")
+		appendSection("")
 	}
 	if m.validationDialog.specValid {
-		sections = append(sections, lipgloss.NewStyle().
+		appendSection(lipgloss.NewStyle().
 			Bold(true).
 			Foreground(colorSuccess).
 			Width(w).
@@ -512,17 +545,17 @@ func (m Model) buildValidationBodyLines() []string {
 			Foreground(colorDanger).
 			Width(w).
 			Render(fmt.Sprintf("✗ Compose specification (%d) - does not conform:", len(m.validationDialog.specIssues)))
-		sections = append(sections, specHeader)
+		appendSection(specHeader)
 		for _, issue := range m.validationDialog.specIssues {
-			sections = append(sections, lipgloss.NewStyle().
+			appendSection(lipgloss.NewStyle().
 				Foreground(colorDanger).
 				Width(w).
-				Render("• "+issue))
+				Render("• " + issue))
 		}
 	}
 
 	body := strings.Join(sections, "\n")
-	return strings.Split(body, "\n")
+	return strings.Split(body, "\n"), warningLineOffsets
 }
 
 // clampedValidationScroll runs a candidate scroll offset through
@@ -531,12 +564,34 @@ func (m Model) buildValidationBodyLines() []string {
 // to keep the stored offset itself always in range; see
 // validationScrollWindow's doc comment for why that matters.
 func (m Model) clampedValidationScroll(candidate int) int {
-	clamped, _, _, _ := m.validationScrollWindow(candidate, len(m.buildValidationBodyLines()))
+	bodyLines, _ := m.buildValidationBodyLines()
+	clamped, _, _, _ := m.validationScrollWindow(candidate, len(bodyLines))
 	return clamped
 }
 
+// ensureValidationLineVisible returns a scroll offset that brings the
+// given body line (see buildValidationBodyLines's second return value)
+// into view, scrolling up if it's above the current window and down if
+// it's below — used after Tab/Shift+Tab moves the selected secret
+// warning so it's never left rendered off-screen, requiring the user
+// to separately scroll to find it.
+func (m Model) ensureValidationLineVisible(line int) int {
+	bodyLines, _ := m.buildValidationBodyLines()
+	scroll := m.validationDialog.scroll
+	_, bodyBudget, _, _ := m.validationScrollWindow(scroll, len(bodyLines))
+	if bodyBudget <= 0 {
+		return m.clampedValidationScroll(scroll)
+	}
+	if line < scroll {
+		scroll = line
+	} else if line >= scroll+bodyBudget {
+		scroll = line - bodyBudget + 1
+	}
+	return m.clampedValidationScroll(scroll)
+}
+
 func (m Model) renderValidationDialog() string {
-	w := dialogContentWidth(m.width)
+	w := validationDialogContentWidth(m.width)
 
 	title := lipgloss.NewStyle().
 		Bold(true).
@@ -544,7 +599,7 @@ func (m Model) renderValidationDialog() string {
 		Width(w).
 		Render("Validation")
 
-	bodyLines := m.buildValidationBodyLines()
+	bodyLines, _ := m.buildValidationBodyLines()
 
 	// scroll is clamped to the exact same bounds updateValidation already
 	// enforces on every keypress/wheel event (see validationScrollWindow

@@ -128,13 +128,16 @@ func (m Model) renderSecretStrategyDialog() string {
 	var lines []string
 	lines = append(lines, title, "", subtitle, "")
 	for i, opt := range options {
-		prefix := "  "
+		// Every option gets the same "▸" marker so the list reads as
+		// navigable at a glance — only color/weight distinguishes the
+		// current selection, per the earlier version's "▸" showing up
+		// only on the selected line reading as plain, unmarked text
+		// for the other two.
 		style := lipgloss.NewStyle().Foreground(colorSubtle).Width(w)
 		if i == m.secretStrategy.selected {
-			prefix = "▸ "
 			style = lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Width(w)
 		}
-		lines = append(lines, style.Render(prefix+opt.label))
+		lines = append(lines, style.Render("▸ "+opt.label))
 		descStyle := lipgloss.NewStyle().Foreground(colorSubtle).Width(w)
 		lines = append(lines, descStyle.Render("    "+opt.desc))
 	}
