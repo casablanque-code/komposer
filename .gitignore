@@ -6,3 +6,6 @@ docker-compose.yml
 *.patch
 *.exe
 coverage.out
+/secrets
+.env
+compose.yaml
