@@ -12,6 +12,7 @@ var (
 	colorSuccess = lipgloss.Color("42")  // save banner
 	colorWarning = lipgloss.Color("214") // non-blocking validation warnings
 	colorDanger  = lipgloss.Color("204") // delete/error banner
+	colorFixable = lipgloss.Color("117") // warnings the secret picker can act on
 )
 
 var (

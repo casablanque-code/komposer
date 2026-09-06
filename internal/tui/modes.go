@@ -82,17 +82,20 @@ type validationDialog struct {
 	// secretRefs is parallel to warnings: secretRefs[i] is non-nil
 	// when warnings[i] is one classifySecretEnv flagged (empty or
 	// hardcoded) and therefore something ConvertSecretToEnvFile /
-	// ConvertSecretToComposeSecret can act on — see secretItems().
+	// ConvertSecretToComposeSecret can act on (rendered with an arrow marker instead of a circle - see buildValidationBodyLines).
 	// Warnings with no corresponding fix (e.g. the Postgres-specific
 	// "no POSTGRES_PASSWORD set at all" advisory, which has no
 	// existing environment entry to convert) are left nil here.
 	secretRefs []*composer.HardcodedSecret
-	// secretCursor indexes into secretItems() (not directly into
-	// warnings/secretRefs) — it's which of the *fixable* warnings is
-	// currently selected for the 'tab'/'enter' actions in
-	// updateValidation. Reset to 0 whenever showValidation rebuilds
-	// the dialog, including right after applying a fix.
-	secretCursor int
+	// selectedWarning is which entry in warnings/secretRefs is
+	// currently under the cursor — Up/Down move it directly (see
+	// updateValidation), rather than a separate Tab that only
+	// visited the fixable ones. -1 when there are no warnings at all.
+	// A warning with no fix behind it (secretRefs[selectedWarning] ==
+	// nil) can still be the current selection; Enter on one of those
+	// just closes the dialog, the same as it always has with nothing
+	// selected.
+	selectedWarning int
 	// actionMessage shows the result of the most recent secret
 	// conversion (success or failure) as a banner at the top of the
 	// report. Cleared whenever showValidation next runs.
@@ -108,23 +111,10 @@ type validationDialog struct {
 	scroll     int
 }
 
-// secretItems returns the indices (into warnings/secretRefs) of every
-// warning that has a fixable secret behind it, in display order. Used
-// by both rendering (to know which warning line is "selected") and
-// updateValidation (to know what 'tab'/'enter' operate on).
-func (d validationDialog) secretItems() []int {
-	var items []int
-	for i, ref := range d.secretRefs {
-		if ref != nil {
-			items = append(items, i)
-		}
-	}
-	return items
-}
-
 // secretStrategyDialog holds state for the "how should this secret be
 // stored" picker, opened from the validation dialog (Enter, on a
-// warning secretItems() considers fixable). service/key/empty identify
+// selected warning with a non-nil secretRefs entry). service/key/empty
+// identify
 // which environment entry it's acting on; selected is the currently
 // highlighted option (0 = .env, 1 = Compose secret, 2 = keep as is).
 type secretStrategyDialog struct {

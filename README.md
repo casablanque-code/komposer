@@ -69,7 +69,7 @@ file.
   understood.
 - **Explicit save** (`Ctrl+S`) — prompts for a path (defaulting to
   `compose.yaml`) and asks before overwriting an existing file.
-  If you quit (`q`) with unsaved changes, you get the same prompt
+  If you quit (`q` or `Esc`) with unsaved changes, you get the same prompt
   instead of losing them silently.
 - **Editing a service**: Esc discards your edits (asking for
   confirmation only if you actually changed something) rather than
@@ -185,7 +185,7 @@ with `go run .` instead, if you'd rather not produce a binary.
 | Key | Action |
 |---|---|
 | `Ctrl+S` | save — prompts for a path (default `compose.yaml`), asks before overwriting an existing file |
-| `q` | quit — if there are unsaved changes, opens the same save prompt with an explicit "quit without saving" option; quits immediately otherwise |
+| `q` / `Esc` | quit — if there are unsaved changes, opens the same save prompt with an explicit "quit without saving" option; quits immediately otherwise |
 | `Ctrl+C` | quit immediately, no prompt |
 
 ## Project layout

@@ -500,28 +500,26 @@ func (m Model) buildValidationBodyLines() ([]string, []int) {
 			Render(fmt.Sprintf("Warnings (%d) - valid, but worth a look:", len(m.validationDialog.warnings)))
 		appendSection(warnHeader)
 
-		// selectedIdx is which warning (if any) secretItems()/secretCursor
-		// currently points at — the one Enter would open the strategy
-		// picker for. Rendered with its own bullet/style so it's clear
-		// which warning "enter: convert" in the hint refers to; other
-		// fixable warnings aren't otherwise marked (tab cycles through
-		// them to find them, rather than marking every one at once and
-		// risking it read as a checklist).
-		selectedIdx := -1
-		if items := m.validationDialog.secretItems(); len(items) > 0 {
-			selectedIdx = items[m.validationDialog.secretCursor]
-		}
-
 		warningLineOffsets = make([]int, len(m.validationDialog.warnings))
 		for i, warning := range m.validationDialog.warnings {
 			warningLineOffsets[i] = lineCount
-			bullet := "• "
-			style := lipgloss.NewStyle().Foreground(colorWarning).Width(w)
-			if i == selectedIdx {
-				bullet = "▸ "
+
+			// Circle for a warning the picker can't do anything with,
+			// arrow for one it can — so which warnings are actionable
+			// is visible before you ever move the cursor onto them,
+			// not just discovered by landing on one.
+			fixable := m.validationDialog.secretRefs[i] != nil
+			marker := "○ "
+			color := colorWarning
+			if fixable {
+				marker = "▸ "
+				color = colorFixable
+			}
+			style := lipgloss.NewStyle().Foreground(color).Width(w)
+			if i == m.validationDialog.selectedWarning {
 				style = lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Width(w)
 			}
-			appendSection(style.Render(bullet + warning))
+			appendSection(style.Render(marker + warning))
 		}
 	}
 
@@ -651,8 +649,8 @@ func (m Model) renderValidationDialog() string {
 	}
 
 	hintText := "↑↓: scroll • Esc: close"
-	if len(m.validationDialog.secretItems()) > 0 {
-		hintText = "↑↓: scroll • Tab: next secret • Enter: convert selected • Esc: close"
+	if len(m.validationDialog.warnings) > 0 {
+		hintText = "↑↓: select • Enter: convert selected • PgUp/PgDn: scroll • Esc: close"
 	}
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).

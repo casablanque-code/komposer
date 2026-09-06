@@ -355,7 +355,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
-		case "q":
+		case "q", "esc":
+			// esc quits here the same way q does — everywhere else in
+			// the app esc means "back out of this dialog", so on the
+			// main screen (nothing to back out of) it's the natural
+			// extra way to reach for quitting instead of forcing q as
+			// the only option.
 			// Previously this quit immediately every time, with no
 			// warning — any unsaved edits were silently lost. Now,
 			// if there's nothing unsaved, quitting still needs no
@@ -690,44 +695,49 @@ func (m Model) updateValidation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		// With no fixable secret selected, Enter just closes the
-		// dialog — same as it always has. With one selected, it opens
-		// the strategy picker for it instead, so Enter stays "the
-		// obvious thing to press" either way rather than needing a
-		// separate key the user has to discover.
-		items := m.validationDialog.secretItems()
-		if len(items) == 0 {
+		// Enter only does something when the current selection has a
+		// fix behind it; otherwise it closes the dialog, same as it
+		// always has with nothing to act on.
+		if m.validationDialog.selectedWarning < 0 {
 			m.currentMode = modeNormal
 			return m, nil
 		}
-		ref := m.validationDialog.secretRefs[items[m.validationDialog.secretCursor]]
+		ref := m.validationDialog.secretRefs[m.validationDialog.selectedWarning]
+		if ref == nil {
+			m.currentMode = modeNormal
+			return m, nil
+		}
 		m.secretStrategy = newSecretStrategyDialog(ref.Service, ref.Key, ref.Empty)
 		m.currentMode = modeSecretStrategy
 		return m, nil
 
-	case "tab":
-		items := m.validationDialog.secretItems()
-		if len(items) == 0 {
-			return m, nil
-		}
-		m.validationDialog.secretCursor = (m.validationDialog.secretCursor + 1) % len(items)
-		m.validationDialog.scroll = m.ensureValidationLineVisible(m.selectedWarningLine())
-		return m, nil
-
-	case "shift+tab":
-		items := m.validationDialog.secretItems()
-		if len(items) == 0 {
-			return m, nil
-		}
-		m.validationDialog.secretCursor = (m.validationDialog.secretCursor - 1 + len(items)) % len(items)
-		m.validationDialog.scroll = m.ensureValidationLineVisible(m.selectedWarningLine())
-		return m, nil
-
 	case "up", "k":
+		// With warnings present, Up/Down move the selection among
+		// them (stopping at the ends rather than wrapping, so it
+		// reads as "the top/bottom of the list" rather than jumping
+		// back around unexpectedly) instead of raw-scrolling — see
+		// ensureValidationLineVisible for how the selected one is
+		// kept on-screen. With no warnings there's nothing to select,
+		// so Up/Down fall back to plain scrolling of whatever's there
+		// (errors and/or the Compose Spec section).
+		if len(m.validationDialog.warnings) > 0 {
+			if m.validationDialog.selectedWarning > 0 {
+				m.validationDialog.selectedWarning--
+			}
+			m.validationDialog.scroll = m.ensureValidationLineVisible(m.selectedWarningLine())
+			return m, nil
+		}
 		m.validationDialog.scroll = m.clampedValidationScroll(m.validationDialog.scroll - 1)
 		return m, nil
 
 	case "down", "j":
+		if len(m.validationDialog.warnings) > 0 {
+			if m.validationDialog.selectedWarning < len(m.validationDialog.warnings)-1 {
+				m.validationDialog.selectedWarning++
+			}
+			m.validationDialog.scroll = m.ensureValidationLineVisible(m.selectedWarningLine())
+			return m, nil
+		}
 		// Clamped immediately against the report's actual length (see
 		// clampedValidationScroll / validationScrollWindow), not just
 		// at render time — otherwise pressing "down" past the end of
@@ -739,6 +749,10 @@ func (m Model) updateValidation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "pgup":
+		// Bulk paging always raw-scrolls the whole report, regardless
+		// of whether there's a warning selection — it's the way to
+		// read a long Errors/Compose-spec section that Up/Down (busy
+		// moving the warning selection) doesn't reach.
 		m.validationDialog.scroll = m.clampedValidationScroll(m.validationDialog.scroll - 10)
 		return m, nil
 
@@ -804,18 +818,17 @@ func (m Model) updateImport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // selectedWarningLine returns the body-line offset (see
-// buildValidationBodyLines) of the warning secretItems()/secretCursor
-// currently points at, or 0 if there isn't one — used to scroll it
-// into view after Tab/Shift+Tab (see ensureValidationLineVisible).
+// buildValidationBodyLines) of the warning currently under the cursor
+// (validationDialog.selectedWarning), or 0 if there isn't one — used
+// to scroll it into view after Up/Down moves it (see
+// ensureValidationLineVisible).
 func (m Model) selectedWarningLine() int {
-	items := m.validationDialog.secretItems()
-	if len(items) == 0 {
+	if m.validationDialog.selectedWarning < 0 {
 		return 0
 	}
 	_, offsets := m.buildValidationBodyLines()
-	idx := items[m.validationDialog.secretCursor]
-	if idx < len(offsets) {
-		return offsets[idx]
+	if m.validationDialog.selectedWarning < len(offsets) {
+		return offsets[m.validationDialog.selectedWarning]
 	}
 	return 0
 }
@@ -875,13 +888,19 @@ func (m *Model) showValidation() {
 		specResult = composer.SpecValidationResult{Valid: true}
 	}
 
+	selectedWarning := -1
+	if len(warnings) > 0 {
+		selectedWarning = 0
+	}
+
 	m.validationDialog = validationDialog{
-		errors:     errors,
-		warnings:   warnings,
-		secretRefs: secretRefs,
-		specValid:  specResult.Valid,
-		specIssues: specResult.Issues,
-		scroll:     0,
+		errors:          errors,
+		warnings:        warnings,
+		secretRefs:      secretRefs,
+		selectedWarning: selectedWarning,
+		specValid:       specResult.Valid,
+		specIssues:      specResult.Issues,
+		scroll:          0,
 	}
 	m.currentMode = modeValidation
 }
@@ -1129,7 +1148,7 @@ func (m Model) renderHelpBar() string {
 		// the normal 3-pane help text (pane switching, add/delete,
 		// etc.) doesn't apply to anything visible on this screen, so
 		// showing it here was misleading rather than helpful.
-		help = "↑↓: choose • enter: select • q: quit"
+		help = "↑↓: choose • enter: select • q/esc: quit"
 	default:
 		help = m.normalHelpText()
 	}
@@ -1192,8 +1211,8 @@ func (m Model) normalHelpText() string {
 		}
 		return "enter: confirm • esc: back"
 	case modeValidation:
-		if len(m.validationDialog.secretItems()) > 0 {
-			return "↑↓: scroll • tab: next secret • enter: convert selected • esc: close"
+		if len(m.validationDialog.warnings) > 0 {
+			return "↑↓: select • enter: convert selected • pgup/pgdn: scroll • esc: close"
 		}
 		return "↑↓: scroll • esc: close"
 	case modeSecretStrategy:
@@ -1210,12 +1229,12 @@ func (m Model) normalHelpText() string {
 		return "enter: save • esc: cancel"
 	default:
 		if m.focus == paneLeft {
-			return "↑↓: navigate • ←→: switch pane • a: add • d: delete • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q: quit"
+			return "↑↓: navigate • ←→: switch pane • a: add • d: delete • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q/esc: quit"
 		}
 		if m.focus == paneCenter {
-			return "←→: switch pane • enter: edit • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q: quit"
+			return "←→: switch pane • enter: edit • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q/esc: quit"
 		}
-		return "↑↓: scroll • ←→: switch pane • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q: quit"
+		return "↑↓: scroll • ←→: switch pane • ctrl+p: presets • ctrl+o: import • ctrl+v: validate • ctrl+s: save • q/esc: quit"
 	}
 }
 
