@@ -675,7 +675,20 @@ func (m Model) renderValidationDialog() string {
 		if bar == scrollbarThumbChar {
 			style = thumbStyle
 		}
-		windowed[i] = line + " " + style.Render(bar)
+		// Every styled body line is already exactly w columns wide
+		// (each section render call above uses .Width(w)), but the
+		// blank separator lines between sections are literal "" —
+		// zero width. Left as-is, the bar appended right after them
+		// would land near column 1 instead of column w+1, next to
+		// whatever real text happens to be at that x position on
+		// neighboring rows once the box pads everything into a
+		// rectangle — exactly the "scrollbar slides into the text"
+		// symptom on short reports where separator rows are a bigger
+		// share of what's visible. Re-padding line to w here keeps
+		// every row's bar at the same column regardless of what kind
+		// of row it is.
+		padded := lipgloss.NewStyle().Width(w).Render(line)
+		windowed[i] = padded + " " + style.Render(bar)
 	}
 
 	windowedBody := strings.Join(windowed, "\n")

@@ -715,18 +715,17 @@ func (m Model) updateValidation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "up", "k":
 		// With warnings present, Up/Down move the selection one
-		// warning at a time — stopping at the first/last rather than
-		// wrapping — and always scroll it into view (see
-		// ensureValidationLineVisible), so plain arrow keys alone
-		// reach every warning in the report no matter how long it is;
-		// nothing else (no PgUp/PgDn, no separate scroll mode) is
-		// needed for that. With no warnings there's nothing to
-		// select, so Up/Down fall back to plain line-scrolling
-		// whatever's there (errors and/or the Compose Spec section).
-		if len(m.validationDialog.warnings) > 0 {
-			if m.validationDialog.selectedWarning > 0 {
-				m.validationDialog.selectedWarning--
-			}
+		// warning at a time — stopping at the first, not wrapping —
+		// scrolling it into view each move (see
+		// ensureValidationLineVisible). Once there's no further
+		// warning to move onto (already at the first one), further
+		// presses fall through to plain line-scrolling instead of
+		// doing nothing — otherwise there'd be no way to reach an
+		// Errors section sitting above the warnings at all. With no
+		// warnings at all, there's nothing to select, so Up/Down are
+		// plain line-scrolling from the start.
+		if len(m.validationDialog.warnings) > 0 && m.validationDialog.selectedWarning > 0 {
+			m.validationDialog.selectedWarning--
 			m.validationDialog.scroll = m.ensureValidationLineVisible(m.selectedWarningLine())
 			return m, nil
 		}
@@ -734,10 +733,14 @@ func (m Model) updateValidation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "down", "j":
-		if len(m.validationDialog.warnings) > 0 {
-			if m.validationDialog.selectedWarning < len(m.validationDialog.warnings)-1 {
-				m.validationDialog.selectedWarning++
-			}
+		// Same idea in reverse: once past the last warning, plain
+		// line-scrolling is what reaches the Compose Spec section
+		// (and its validity checkmark) below the warnings — without
+		// this fallback, Down stopped doing anything at all once the
+		// last warning was selected, and nothing past it was ever
+		// reachable.
+		if len(m.validationDialog.warnings) > 0 && m.validationDialog.selectedWarning < len(m.validationDialog.warnings)-1 {
+			m.validationDialog.selectedWarning++
 			m.validationDialog.scroll = m.ensureValidationLineVisible(m.selectedWarningLine())
 			return m, nil
 		}
