@@ -698,15 +698,14 @@ func (m Model) updateValidation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		// Nothing happens unless the current scroll position has
-		// landed on a warning with a fix behind it — not even closing
-		// the dialog. Esc is the only way out; Enter is purely "act on
-		// what's selected, or do nothing".
-		idx := m.currentWarningIndex()
-		if idx < 0 {
+		// Purely "act on the current selection, or do nothing" — never
+		// closes the dialog. Landing on (or starting on) a warning
+		// with no fix behind it makes Enter a no-op; Esc is the only
+		// way out.
+		if m.validationDialog.selectedWarning < 0 {
 			return m, nil
 		}
-		ref := m.validationDialog.secretRefs[idx]
+		ref := m.validationDialog.secretRefs[m.validationDialog.selectedWarning]
 		if ref == nil {
 			return m, nil
 		}
@@ -715,10 +714,33 @@ func (m Model) updateValidation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "up", "k":
+		// With warnings present, Up/Down move the selection one
+		// warning at a time — stopping at the first/last rather than
+		// wrapping — and always scroll it into view (see
+		// ensureValidationLineVisible), so plain arrow keys alone
+		// reach every warning in the report no matter how long it is;
+		// nothing else (no PgUp/PgDn, no separate scroll mode) is
+		// needed for that. With no warnings there's nothing to
+		// select, so Up/Down fall back to plain line-scrolling
+		// whatever's there (errors and/or the Compose Spec section).
+		if len(m.validationDialog.warnings) > 0 {
+			if m.validationDialog.selectedWarning > 0 {
+				m.validationDialog.selectedWarning--
+			}
+			m.validationDialog.scroll = m.ensureValidationLineVisible(m.selectedWarningLine())
+			return m, nil
+		}
 		m.validationDialog.scroll = m.clampedValidationScroll(m.validationDialog.scroll - 1)
 		return m, nil
 
 	case "down", "j":
+		if len(m.validationDialog.warnings) > 0 {
+			if m.validationDialog.selectedWarning < len(m.validationDialog.warnings)-1 {
+				m.validationDialog.selectedWarning++
+			}
+			m.validationDialog.scroll = m.ensureValidationLineVisible(m.selectedWarningLine())
+			return m, nil
+		}
 		// Clamped immediately against the report's actual length (see
 		// clampedValidationScroll / validationScrollWindow), not just
 		// at render time — otherwise pressing "down" past the end of
@@ -786,42 +808,20 @@ func (m Model) updateImport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// currentWarningIndex returns which warning (if any) the current
-// scroll position has scrolled to — the topmost visible line falls
-// somewhere inside that warning's rendered block. There's no
-// separately-tracked selection cursor: Up/Down just scroll the report
-// one line at a time like any plain scrollable view (no more
-// Tab-cycling, no PgUp/PgDn — plain Up/Down reach the whole report,
-// start to end), and whichever warning that lands on becomes the
-// implicit selection Enter acts on. Returns -1 when the current
-// position isn't inside any warning's block (e.g. still in the Errors
-// section, or there are no warnings at all).
-func (m Model) currentWarningIndex() int {
-	offsets := m.validationWarningOffsets()
-	if len(offsets) == 0 {
-		return -1
+// selectedWarningLine returns the body-line offset (see
+// buildValidationBodyLines) of the warning currently under the cursor
+// (validationDialog.selectedWarning), or 0 if there isn't one — used
+// to scroll it into view after Up/Down moves it (see
+// ensureValidationLineVisible).
+func (m Model) selectedWarningLine() int {
+	if m.validationDialog.selectedWarning < 0 {
+		return 0
 	}
-	line := m.validationDialog.scroll
-	idx := -1
-	for i, off := range offsets {
-		if off > line {
-			break
-		}
-		idx = i
-	}
-	return idx
-}
-
-// validationWarningOffsets returns buildValidationBodyLines' per-warning
-// line offsets. Computing them doesn't need to know which one (if any)
-// ends up highlighted — the marker/color used for the selected line
-// never changes how long it is or how it wraps (see
-// buildValidationBodyLines) — so this is safe to call before
-// currentWarningIndex has an answer, breaking what would otherwise be
-// a circular dependency between the two.
-func (m Model) validationWarningOffsets() []int {
 	_, offsets := m.buildValidationBodyLines(-1)
-	return offsets
+	if m.validationDialog.selectedWarning < len(offsets) {
+		return offsets[m.validationDialog.selectedWarning]
+	}
+	return 0
 }
 
 // showValidation runs validation and displays results in a dialog.
@@ -879,13 +879,29 @@ func (m *Model) showValidation() {
 		specResult = composer.SpecValidationResult{Valid: true}
 	}
 
+	// The first warning (if any) starts pre-selected, purple, ready
+	// for Enter/Up/Down immediately — not something the user has to
+	// scroll onto first.
+	selectedWarning := -1
+	if len(warnings) > 0 {
+		selectedWarning = 0
+	}
+
 	m.validationDialog = validationDialog{
-		errors:     errors,
-		warnings:   warnings,
-		secretRefs: secretRefs,
-		specValid:  specResult.Valid,
-		specIssues: specResult.Issues,
-		scroll:     0,
+		errors:          errors,
+		warnings:        warnings,
+		secretRefs:      secretRefs,
+		selectedWarning: selectedWarning,
+		specValid:       specResult.Valid,
+		specIssues:      specResult.Issues,
+		scroll:          0,
+	}
+	if selectedWarning >= 0 {
+		// The first warning usually isn't at line 0 (there's at least
+		// the "Warnings (N)..." header above it, often an Errors
+		// section too) — scroll to it now rather than opening with it
+		// selected-but-off-screen.
+		m.validationDialog.scroll = m.ensureValidationLineVisible(m.selectedWarningLine())
 	}
 	m.currentMode = modeValidation
 }

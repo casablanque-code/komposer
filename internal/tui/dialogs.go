@@ -448,10 +448,10 @@ func validationDialogContentWidth(termWidth int) int {
 // m.validationDialog.warnings), the line index within the returned
 // slice where that warning's rendered block starts. highlightIdx is
 // which warning (if any, -1 for none) to render as the current
-// selection — see currentWarningIndex, which is derived from scroll
-// position rather than independently tracked, and computing it needs
-// this function's offsets first; pass -1 there to get the offsets
-// without depending on an answer this call is what produces.
+// selection — normally m.validationDialog.selectedWarning, but pass
+// -1 when only the offsets are needed (e.g. from
+// ensureValidationLineVisible/clampedValidationScroll), since the
+// marker/color used for the selected line never changes how it wraps.
 func (m Model) buildValidationBodyLines(highlightIdx int) ([]string, []int) {
 	w := validationDialogContentWidth(m.width)
 
@@ -570,6 +570,28 @@ func (m Model) clampedValidationScroll(candidate int) int {
 	return clamped
 }
 
+// ensureValidationLineVisible returns a scroll offset that brings the
+// given body line (see buildValidationBodyLines's second return value)
+// into view, scrolling up if it's above the current window and down if
+// it's below, and leaving scroll untouched if it's already visible —
+// used after Up/Down moves the selected warning so plain arrow keys
+// alone are always enough to reach every warning in a report longer
+// than one screen.
+func (m Model) ensureValidationLineVisible(line int) int {
+	bodyLines, _ := m.buildValidationBodyLines(-1)
+	scroll := m.validationDialog.scroll
+	_, bodyBudget, _, _ := m.validationScrollWindow(scroll, len(bodyLines))
+	if bodyBudget <= 0 {
+		return m.clampedValidationScroll(scroll)
+	}
+	if line < scroll {
+		scroll = line
+	} else if line >= scroll+bodyBudget {
+		scroll = line - bodyBudget + 1
+	}
+	return m.clampedValidationScroll(scroll)
+}
+
 func (m Model) renderValidationDialog() string {
 	w := validationDialogContentWidth(m.width)
 
@@ -579,7 +601,7 @@ func (m Model) renderValidationDialog() string {
 		Width(w).
 		Render("Validation")
 
-	bodyLines, _ := m.buildValidationBodyLines(m.currentWarningIndex())
+	bodyLines, _ := m.buildValidationBodyLines(m.validationDialog.selectedWarning)
 
 	// scroll is clamped to the exact same bounds updateValidation already
 	// enforces on every keypress/wheel event (see validationScrollWindow
