@@ -368,7 +368,29 @@ func (m Model) validationScrollWindow(scroll, bodyLineCount int) (clamped, bodyB
 	// Fixed chrome around the body: border(2) + Padding(1,2)(2) +
 	// title+blank(2) + blank+hint(2) = 8 rows not available to the body.
 	const dialogChrome = 8
-	visible := m.height - dialogChrome
+
+	// Two more optional pieces of chrome that aren't always there, so
+	// they can't be folded into the constant above: the action-result
+	// banner (its own line plus the blank line separating it from the
+	// body — see renderValidationDialog) and the color legend line
+	// (shown only when there are warnings to explain markers for).
+	// Forgetting either of these here was the actual bug behind the
+	// scrollbar/content mismatch reported after the last patch: with
+	// bodyBudget computed too large, the real rendered dialog ended up
+	// taller than the terminal, so lipgloss.Place's vertical centering
+	// clipped it on BOTH ends at once — hiding the very first line
+	// (looked like "the scrollbar doesn't start at the top") and the
+	// last (looked like "no checkmark, even when scrolled all the
+	// way down") simultaneously.
+	extra := 0
+	if m.validationDialog.actionMessage != "" {
+		extra += 2
+	}
+	if len(m.validationDialog.warnings) > 0 {
+		extra += 1
+	}
+
+	visible := m.height - dialogChrome - extra
 	if visible < 3 {
 		visible = 3
 	}
@@ -573,16 +595,25 @@ const scrollbarThumbChar = "█"
 // top-to-bottom order), representing a classic proportional scrollbar
 // thumb: its size shrinks as the report gets longer relative to the
 // window, and its position tracks how far scroll has moved through the
-// range [0, totalLines-visibleRows]. Returns an all-track bar (no
-// thumb) when the whole report already fits, since there's nothing to
-// scroll to.
+// range [0, totalLines-visibleRows]. When the whole report already
+// fits (nothing to scroll to), the bar is a solid thumb top-to-bottom
+// rather than an empty/track-only bar — a full bar reads as "you're
+// seeing everything", where an empty one looked like a scrollbar stuck
+// adrift with no thumb at all.
 func renderValidationScrollbar(scroll, visibleRows, totalLines int) []string {
 	bars := make([]string, visibleRows)
+
+	if visibleRows <= 0 {
+		return bars
+	}
+	if totalLines <= visibleRows {
+		for i := range bars {
+			bars[i] = scrollbarThumbChar
+		}
+		return bars
+	}
 	for i := range bars {
 		bars[i] = "│"
-	}
-	if visibleRows <= 0 || totalLines <= visibleRows {
-		return bars
 	}
 
 	thumbSize := visibleRows * visibleRows / totalLines
