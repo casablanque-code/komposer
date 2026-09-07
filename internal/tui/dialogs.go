@@ -446,10 +446,13 @@ func validationDialogContentWidth(termWidth int) int {
 // buildValidationBodyLines renders the validation report body and also
 // returns, for each warning (indexed the same as
 // m.validationDialog.warnings), the line index within the returned
-// slice where that warning's rendered block starts — used by
-// updateValidation to scroll a newly tab-selected warning into view
-// rather than leaving it to potentially render off-screen.
-func (m Model) buildValidationBodyLines() ([]string, []int) {
+// slice where that warning's rendered block starts. highlightIdx is
+// which warning (if any, -1 for none) to render as the current
+// selection — see currentWarningIndex, which is derived from scroll
+// position rather than independently tracked, and computing it needs
+// this function's offsets first; pass -1 there to get the offsets
+// without depending on an answer this call is what produces.
+func (m Model) buildValidationBodyLines(highlightIdx int) ([]string, []int) {
 	w := validationDialogContentWidth(m.width)
 
 	var sections []string
@@ -504,19 +507,19 @@ func (m Model) buildValidationBodyLines() ([]string, []int) {
 		for i, warning := range m.validationDialog.warnings {
 			warningLineOffsets[i] = lineCount
 
-			// Circle for a warning the picker can't do anything with,
-			// arrow for one it can — so which warnings are actionable
-			// is visible before you ever move the cursor onto them,
-			// not just discovered by landing on one.
+			// Filled circle for a warning the picker can't do anything
+			// with, arrow for one it can — so which warnings are
+			// actionable is visible before you ever scroll onto one,
+			// not just discovered by landing on it.
 			fixable := m.validationDialog.secretRefs[i] != nil
-			marker := "○ "
+			marker := "● "
 			color := colorWarning
 			if fixable {
 				marker = "▸ "
 				color = colorFixable
 			}
 			style := lipgloss.NewStyle().Foreground(color).Width(w)
-			if i == m.validationDialog.selectedWarning {
+			if i == highlightIdx {
 				style = lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Width(w)
 			}
 			appendSection(style.Render(marker + warning))
@@ -562,30 +565,9 @@ func (m Model) buildValidationBodyLines() ([]string, []int) {
 // to keep the stored offset itself always in range; see
 // validationScrollWindow's doc comment for why that matters.
 func (m Model) clampedValidationScroll(candidate int) int {
-	bodyLines, _ := m.buildValidationBodyLines()
+	bodyLines, _ := m.buildValidationBodyLines(-1)
 	clamped, _, _, _ := m.validationScrollWindow(candidate, len(bodyLines))
 	return clamped
-}
-
-// ensureValidationLineVisible returns a scroll offset that brings the
-// given body line (see buildValidationBodyLines's second return value)
-// into view, scrolling up if it's above the current window and down if
-// it's below — used after Tab/Shift+Tab moves the selected secret
-// warning so it's never left rendered off-screen, requiring the user
-// to separately scroll to find it.
-func (m Model) ensureValidationLineVisible(line int) int {
-	bodyLines, _ := m.buildValidationBodyLines()
-	scroll := m.validationDialog.scroll
-	_, bodyBudget, _, _ := m.validationScrollWindow(scroll, len(bodyLines))
-	if bodyBudget <= 0 {
-		return m.clampedValidationScroll(scroll)
-	}
-	if line < scroll {
-		scroll = line
-	} else if line >= scroll+bodyBudget {
-		scroll = line - bodyBudget + 1
-	}
-	return m.clampedValidationScroll(scroll)
 }
 
 func (m Model) renderValidationDialog() string {
@@ -597,7 +579,7 @@ func (m Model) renderValidationDialog() string {
 		Width(w).
 		Render("Validation")
 
-	bodyLines, _ := m.buildValidationBodyLines()
+	bodyLines, _ := m.buildValidationBodyLines(m.currentWarningIndex())
 
 	// scroll is clamped to the exact same bounds updateValidation already
 	// enforces on every keypress/wheel event (see validationScrollWindow
@@ -650,20 +632,33 @@ func (m Model) renderValidationDialog() string {
 
 	hintText := "↑↓: scroll • Esc: close"
 	if len(m.validationDialog.warnings) > 0 {
-		hintText = "↑↓: select • Enter: convert selected • PgUp/PgDn: scroll • Esc: close"
+		hintText = "↑↓: scroll • Enter: convert selected • Esc: close"
 	}
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
 		Width(w).
 		Render(hintText)
 
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		title,
-		"",
-		banner+windowedBody,
-		"",
-		hint,
-	)
+	// A one-line legend for what the two warning markers mean, in the
+	// actual colors they're drawn in rather than just naming the
+	// colors — reading it off the screen is faster than translating a
+	// color name back to what's rendered above.
+	var legend string
+	if len(m.validationDialog.warnings) > 0 {
+		fixableLegend := lipgloss.NewStyle().Foreground(colorFixable).Render("▸ editable")
+		infoLegend := lipgloss.NewStyle().Foreground(colorWarning).Render("● info only")
+		legend = lipgloss.NewStyle().
+			Width(w).
+			Render(fixableLegend + "   " + infoLegend)
+	}
+
+	var lines []string
+	lines = append(lines, title, "", banner+windowedBody, "")
+	if legend != "" {
+		lines = append(lines, legend)
+	}
+	lines = append(lines, hint)
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 
 	borderColor := colorSuccess
 	switch {
@@ -730,7 +725,7 @@ func (m Model) renderSaveAsDialog() string {
 		titleText = "You have unsaved changes"
 		borderColor = colorWarning
 		prompt = "Save before quitting? Enter a path, or quit without saving:"
-		hint = "Enter: save & quit • q: quit without saving • Esc: keep working"
+		hint = "Enter: save & quit • Ctrl+Q: quit without saving • Esc: keep working"
 	} else {
 		prompt = "Save to path:"
 		hint = "Enter: save • Esc: cancel"

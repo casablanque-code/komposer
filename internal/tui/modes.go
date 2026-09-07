@@ -87,15 +87,6 @@ type validationDialog struct {
 	// "no POSTGRES_PASSWORD set at all" advisory, which has no
 	// existing environment entry to convert) are left nil here.
 	secretRefs []*composer.HardcodedSecret
-	// selectedWarning is which entry in warnings/secretRefs is
-	// currently under the cursor — Up/Down move it directly (see
-	// updateValidation), rather than a separate Tab that only
-	// visited the fixable ones. -1 when there are no warnings at all.
-	// A warning with no fix behind it (secretRefs[selectedWarning] ==
-	// nil) can still be the current selection; Enter on one of those
-	// just closes the dialog, the same as it always has with nothing
-	// selected.
-	selectedWarning int
 	// actionMessage shows the result of the most recent secret
 	// conversion (success or failure) as a banner at the top of the
 	// report. Cleared whenever showValidation next runs.
