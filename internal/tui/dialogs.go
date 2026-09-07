@@ -354,17 +354,17 @@ func (m Model) renderEditableForm() string {
 // validationScrollWindow is the single source of truth for the
 // validation dialog's scroll bounds: given a candidate scroll offset
 // and the report's total row count, it returns the actual clamped
-// offset, how many of those rows fit in the body's share of the dialog
-// once indicators are accounted for, and whether each indicator is
-// shown. renderValidationDialog uses it to build the visible window;
-// updateValidation (model.go) uses it to clamp the *stored* scroll
-// value on every keypress/wheel event, not just at render time —
-// previously "down" had no upper bound at all (only the render-time
-// window was clamped), so scrolling past the end of a long report and
-// then scrolling back up required pressing "up" exactly as many times
-// as "down" had been pressed past the end, even though the screen
-// itself hadn't moved in the meantime.
-func (m Model) validationScrollWindow(scroll, bodyLineCount int) (clamped, bodyBudget int, showAbove, showBelow bool) {
+// offset and how many of those rows fit in the body's share of the
+// dialog. renderValidationDialog uses it to build the visible window
+// (plus a scrollbar reflecting position within the report — see
+// renderValidationScrollbar); updateValidation (model.go) uses it to
+// clamp the *stored* scroll value on every keypress/wheel event, not
+// just at render time — previously "down" had no upper bound at all
+// (only the render-time window was clamped), so scrolling past the
+// end of a long report and then scrolling back up required pressing
+// "up" exactly as many times as "down" had been pressed past the end,
+// even though the screen itself hadn't moved in the meantime.
+func (m Model) validationScrollWindow(scroll, bodyLineCount int) (clamped, bodyBudget int) {
 	// Fixed chrome around the body: border(2) + Padding(1,2)(2) +
 	// title+blank(2) + blank+hint(2) = 8 rows not available to the body.
 	const dialogChrome = 8
@@ -377,49 +377,22 @@ func (m Model) validationScrollWindow(scroll, bodyLineCount int) (clamped, bodyB
 		scroll = 0
 	}
 
-	// Each shown indicator costs two rows, not one: the "N more
-	// above/below" line itself plus a blank spacer that keeps it from
-	// sitting flush against the report line right next to it (see
-	// renderValidationDialog) — without the spacer it reads as just
-	// another entry in the list rather than dialog chrome.
-	const indicatorCost = 2
-
-	showAbove = scroll > 0
 	bodyBudget = visible
-	if showAbove {
-		bodyBudget -= indicatorCost
+	if bodyBudget > bodyLineCount {
+		bodyBudget = bodyLineCount
 	}
 	if bodyBudget < 1 {
 		bodyBudget = 1
 	}
-	// Whether a "more below" indicator is needed depends on how many
-	// lines are left after this window — which depends on bodyBudget,
-	// which is why this has to be resolved after showAbove above.
-	showBelow = bodyLineCount-scroll > bodyBudget
-	if showBelow {
-		bodyBudget -= indicatorCost
-		if bodyBudget < 1 {
-			bodyBudget = 1
-		}
-	}
 
-	// Now that the final budget is known, clamp scroll so the window
-	// doesn't run past the end of the report, and recheck whether that
-	// still leaves anything above/below (clamping can change both).
 	if maxScroll := bodyLineCount - bodyBudget; scroll > maxScroll {
 		scroll = maxScroll
 	}
 	if scroll < 0 {
 		scroll = 0
 	}
-	showAbove = scroll > 0
-	end := scroll + bodyBudget
-	if end > bodyLineCount {
-		end = bodyLineCount
-	}
-	showBelow = bodyLineCount-end > 0
 
-	return scroll, bodyBudget, showAbove, showBelow
+	return scroll, bodyBudget
 }
 
 // validationDialogContentWidth is dialogContentWidth's preferred width,
@@ -566,7 +539,7 @@ func (m Model) buildValidationBodyLines(highlightIdx int) ([]string, []int) {
 // validationScrollWindow's doc comment for why that matters.
 func (m Model) clampedValidationScroll(candidate int) int {
 	bodyLines, _ := m.buildValidationBodyLines(-1)
-	clamped, _, _, _ := m.validationScrollWindow(candidate, len(bodyLines))
+	clamped, _ := m.validationScrollWindow(candidate, len(bodyLines))
 	return clamped
 }
 
@@ -580,7 +553,7 @@ func (m Model) clampedValidationScroll(candidate int) int {
 func (m Model) ensureValidationLineVisible(line int) int {
 	bodyLines, _ := m.buildValidationBodyLines(-1)
 	scroll := m.validationDialog.scroll
-	_, bodyBudget, _, _ := m.validationScrollWindow(scroll, len(bodyLines))
+	_, bodyBudget := m.validationScrollWindow(scroll, len(bodyLines))
 	if bodyBudget <= 0 {
 		return m.clampedValidationScroll(scroll)
 	}
@@ -590,6 +563,47 @@ func (m Model) ensureValidationLineVisible(line int) int {
 		scroll = line - bodyBudget + 1
 	}
 	return m.clampedValidationScroll(scroll)
+}
+
+// scrollbarThumbChar marks a filled (thumb) row in renderValidationScrollbar's
+// output; every other returned row is a plain track character.
+const scrollbarThumbChar = "█"
+
+// renderValidationScrollbar returns one character per visible row (in
+// top-to-bottom order), representing a classic proportional scrollbar
+// thumb: its size shrinks as the report gets longer relative to the
+// window, and its position tracks how far scroll has moved through the
+// range [0, totalLines-visibleRows]. Returns an all-track bar (no
+// thumb) when the whole report already fits, since there's nothing to
+// scroll to.
+func renderValidationScrollbar(scroll, visibleRows, totalLines int) []string {
+	bars := make([]string, visibleRows)
+	for i := range bars {
+		bars[i] = "│"
+	}
+	if visibleRows <= 0 || totalLines <= visibleRows {
+		return bars
+	}
+
+	thumbSize := visibleRows * visibleRows / totalLines
+	if thumbSize < 1 {
+		thumbSize = 1
+	}
+	if thumbSize > visibleRows {
+		thumbSize = visibleRows
+	}
+
+	maxScroll := totalLines - visibleRows
+	trackSpan := visibleRows - thumbSize
+	thumbStart := 0
+	if maxScroll > 0 && trackSpan > 0 {
+		thumbStart = scroll * trackSpan / maxScroll
+	}
+
+	for i := thumbStart; i < thumbStart+thumbSize && i < visibleRows; i++ {
+		bars[i] = scrollbarThumbChar
+	}
+	return bars
 }
 
 func (m Model) renderValidationDialog() string {
@@ -603,37 +617,34 @@ func (m Model) renderValidationDialog() string {
 
 	bodyLines, _ := m.buildValidationBodyLines(m.validationDialog.selectedWarning)
 
-	// scroll is clamped to the exact same bounds updateValidation already
-	// enforces on every keypress/wheel event (see validationScrollWindow
-	// and setValidationScroll in model.go) — clamping again here too
-	// means render never depends on the stored value already being
-	// in-range, e.g. right after a shorter report replaces a longer one.
-	scroll, bodyBudget, showAbove, showBelow := m.validationScrollWindow(m.validationDialog.scroll, len(bodyLines))
+	scroll, bodyBudget := m.validationScrollWindow(m.validationDialog.scroll, len(bodyLines))
 	end := scroll + bodyBudget
 	if end > len(bodyLines) {
 		end = len(bodyLines)
 	}
+	visible := bodyLines[scroll:end]
 
-	// Indicators are centered and set off with a rule so they read as
-	// dialog chrome rather than another bullet in the list, and each
-	// gets its own blank line toward the body so it never sits flush
-	// against a warning/error line right next to it — validationScrollWindow
-	// already reserves the extra row this costs out of bodyBudget.
-	indicatorStyle := lipgloss.NewStyle().
-		Foreground(colorSubtle).
-		Italic(true).
-		Width(w).
-		Align(lipgloss.Center)
+	// A vertical scrollbar in the dialog's own right margin replaces
+	// the old "N more above/below" text lines: those counted raw
+	// report rows (an "N more above" could mean one line — a section
+	// header — even while the very first warning sat at the top of
+	// the window), which read as flatly wrong to anyone thinking in
+	// terms of "which warning am I on" rather than "which row of the
+	// underlying text". A bar communicates roughly-where-you-are
+	// without asserting a specific, easily-misleading count, and
+	// doesn't cost the two rows-per-indicator the text version did.
+	bars := renderValidationScrollbar(scroll, len(visible), len(bodyLines))
+	thumbStyle := lipgloss.NewStyle().Foreground(colorAccent)
+	trackStyle := lipgloss.NewStyle().Foreground(colorSubtle)
 
-	var windowed []string
-	if showAbove {
-		windowed = append(windowed, indicatorStyle.Render(fmt.Sprintf("── %d more above ──", scroll)))
-		windowed = append(windowed, "")
-	}
-	windowed = append(windowed, bodyLines[scroll:end]...)
-	if showBelow {
-		windowed = append(windowed, "")
-		windowed = append(windowed, indicatorStyle.Render(fmt.Sprintf("── %d more below ──", len(bodyLines)-end)))
+	windowed := make([]string, len(visible))
+	for i, line := range visible {
+		bar := bars[i]
+		style := trackStyle
+		if bar == scrollbarThumbChar {
+			style = thumbStyle
+		}
+		windowed[i] = line + " " + style.Render(bar)
 	}
 
 	windowedBody := strings.Join(windowed, "\n")
