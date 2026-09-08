@@ -113,6 +113,21 @@ func (c *ComposeConfig) Validate() ValidationResult {
 		for _, dep := range entry.Config.DependsOn {
 			if !serviceNames[dep.Service] {
 				result.Add(entry.Name, "depends_on", fmt.Sprintf("references non-existent service '%s'", dep.Service))
+				continue
+			}
+			// condition: service_healthy is a promise, not just a
+			// preference — Compose itself refuses to start a stack
+			// where the referenced service has no healthcheck defined
+			// to actually satisfy that condition, so this is an Error
+			// (would break `docker compose up`), not a Warning.
+			if dep.Condition == CondServiceHealthy {
+				if target := c.GetService(dep.Service); target != nil && target.HealthCheck == nil {
+					result.Add(entry.Name, "depends_on", fmt.Sprintf(
+						"depends on '%s' with condition 'service_healthy', but '%s' has no healthcheck configured — "+
+							"Compose will refuse to start this stack; either add a healthcheck to '%s' or "+
+							"change the condition to 'service_started'",
+						dep.Service, dep.Service, dep.Service))
+				}
 			}
 		}
 	}
@@ -305,6 +320,21 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 			"'%s' looks like a database with no volumes configured — data will be lost "+
 				"every time the container is removed or recreated; consider a volume such as './data:%s'",
 			cfg.Image, dir))
+	}
+
+	// A database/stateful image with no healthcheck means depends_on
+	// (this service's own, or another service's on it) can only ever
+	// use condition: service_started — which fires the moment the
+	// process starts listening, not once it's actually ready to
+	// accept connections. Same recognized-image list as the no-volume
+	// check above; same limitation, too — it has no way to know this
+	// about an arbitrary custom image.
+	if hc, ok := suggestedHealthCheck(cfg.Image); ok && cfg.HealthCheck == nil {
+		result.AddWarning(name, "healthcheck", fmt.Sprintf(
+			"'%s' looks like a database with no healthcheck configured — anything with "+
+				"'depends_on: %s' can only wait for the process to start, not for it to actually "+
+				"be ready to accept connections; consider a healthcheck such as %s",
+			cfg.Image, name, formatHealthCheckTest(hc.Test)))
 	}
 
 	// The single most common "wide open database" mistake: Postgres
@@ -509,6 +539,56 @@ func suggestedDataDir(image string) (dir string, ok bool) {
 		}
 	}
 	return "", false
+}
+
+// databaseHealthChecks are the same suggested commands Presets/Stacks
+// already bake into their own database services (see presets.go) —
+// this table exists so validateService can suggest the same thing for
+// a database image a user typed in by hand instead of picking a
+// preset, or one that arrived via an imported file. Interval/Timeout/
+// Retries mirror the presets' own values for the same images where
+// one already exists; for the rest, the same postgres/mysql/redis
+// figures are reused since there's no established komposer precedent
+// to diverge from.
+var databaseHealthChecks = []struct {
+	match string
+	check HealthCheck
+}{
+	{"postgres", HealthCheck{Test: []string{"CMD-SHELL", "pg_isready -U postgres"}, Interval: "10s", Timeout: "5s", Retries: 5}},
+	{"mysql", HealthCheck{Test: []string{"CMD", "mysqladmin", "ping", "-h", "localhost"}, Interval: "10s", Timeout: "5s", Retries: 5}},
+	{"mariadb", HealthCheck{Test: []string{"CMD", "mysqladmin", "ping", "-h", "localhost"}, Interval: "10s", Timeout: "5s", Retries: 5}},
+	{"redis", HealthCheck{Test: []string{"CMD", "redis-cli", "ping"}, Interval: "5s", Timeout: "3s", Retries: 3}},
+	{"mongo", HealthCheck{Test: []string{"CMD", "mongosh", "--eval", "db.adminCommand('ping')"}, Interval: "10s", Timeout: "5s", Retries: 5}},
+	{"rabbitmq", HealthCheck{Test: []string{"CMD", "rabbitmq-diagnostics", "-q", "ping"}, Interval: "10s", Timeout: "5s", Retries: 5}},
+	{"elasticsearch", HealthCheck{Test: []string{"CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"}, Interval: "10s", Timeout: "5s", Retries: 5}},
+}
+
+// suggestedHealthCheck reports a reasonable healthcheck for a known
+// database/stateful image, if the image name matches one of them. The
+// returned HealthCheck is a fresh copy the caller can attach directly
+// (or modify) without aliasing databaseHealthChecks' own Test slice.
+func suggestedHealthCheck(image string) (hc HealthCheck, ok bool) {
+	lower := strings.ToLower(image)
+	for _, d := range databaseHealthChecks {
+		if strings.Contains(lower, d.match) {
+			hc := d.check
+			hc.Test = append([]string(nil), d.check.Test...)
+			return hc, true
+		}
+	}
+	return HealthCheck{}, false
+}
+
+// formatHealthCheckTest renders a healthcheck's Test command the way
+// it'd actually be written in YAML — ["CMD", "redis-cli", "ping"] —
+// for inclusion in a warning message, rather than Go's default slice
+// formatting ([CMD redis-cli ping], with no quoting or commas).
+func formatHealthCheckTest(test []string) string {
+	quoted := make([]string, len(test))
+	for i, t := range test {
+		quoted[i] = fmt.Sprintf("%q", t)
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 // isValidDuration checks if a string is a valid docker duration (e.g., "30s", "1m30s", "2h").

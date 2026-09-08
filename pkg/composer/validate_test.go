@@ -539,3 +539,121 @@ func TestValidateNoWarningForOrdinarySecurityOpt(t *testing.T) {
 		t.Fatalf("did not expect a security_opt warning, got %+v", r.Warnings)
 	}
 }
+
+func TestValidateWarnsOnMissingHealthCheckForDatabase(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("db")
+	svc.Image = "postgres:16"
+	r := c.Validate()
+	if !hasWarning(r, "healthcheck") {
+		t.Fatalf("expected a healthcheck warning for postgres with none configured, got %+v", r.Warnings)
+	}
+}
+
+func TestValidateNoHealthCheckWarningWhenAlreadyConfigured(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("db")
+	svc.Image = "postgres:16"
+	svc.HealthCheck = &HealthCheck{Test: []string{"CMD-SHELL", "pg_isready -U postgres"}}
+	r := c.Validate()
+	if hasWarning(r, "healthcheck") {
+		t.Fatalf("did not expect a healthcheck warning, got %+v", r.Warnings)
+	}
+}
+
+func TestValidateNoHealthCheckWarningForNonDatabaseImage(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx:1.27.3"
+	r := c.Validate()
+	if hasWarning(r, "healthcheck") {
+		t.Fatalf("did not expect a healthcheck warning for a non-database image, got %+v", r.Warnings)
+	}
+}
+
+func TestSuggestedHealthCheck(t *testing.T) {
+	cases := []struct {
+		image   string
+		wantOK  bool
+		wantCmd string // first element of Test, "" if wantOK is false
+	}{
+		{"postgres:16", true, "CMD-SHELL"},
+		{"mysql:8", true, "CMD"},
+		{"mariadb:11", true, "CMD"},
+		{"redis:7-alpine", true, "CMD"},
+		{"mongo:7", true, "CMD"},
+		{"rabbitmq:3-management", true, "CMD"},
+		{"elasticsearch:8.11.0", true, "CMD-SHELL"},
+		{"nginx:alpine", false, ""},
+		{"myapp/custom-service:1.0", false, ""},
+	}
+	for _, tc := range cases {
+		hc, ok := suggestedHealthCheck(tc.image)
+		if ok != tc.wantOK {
+			t.Errorf("suggestedHealthCheck(%q) ok = %v, want %v", tc.image, ok, tc.wantOK)
+			continue
+		}
+		if ok && (len(hc.Test) == 0 || hc.Test[0] != tc.wantCmd) {
+			t.Errorf("suggestedHealthCheck(%q) Test[0] = %v, want %q", tc.image, hc.Test, tc.wantCmd)
+		}
+	}
+}
+
+func TestSuggestedHealthCheckReturnsIndependentCopy(t *testing.T) {
+	hc1, _ := suggestedHealthCheck("postgres:16")
+	hc1.Test[0] = "MUTATED"
+	hc2, _ := suggestedHealthCheck("postgres:16")
+	if hc2.Test[0] == "MUTATED" {
+		t.Fatalf("suggestedHealthCheck's returned Test slice aliases its internal table")
+	}
+}
+
+func TestValidateErrorsOnServiceHealthyWithNoHealthCheck(t *testing.T) {
+	c := NewComposeConfig()
+	db := c.AddService("db")
+	db.Image = "postgres:16"
+	app := c.AddService("app")
+	app.Image = "myapp:1.0"
+	app.DependsOn = []DependsOnEntry{{Service: "db", Condition: CondServiceHealthy}}
+	r := c.Validate()
+	if !hasError(r, "depends_on") {
+		t.Fatalf("expected a depends_on error for service_healthy on a service with no healthcheck, got %+v", r.Errors)
+	}
+}
+
+func TestValidateNoErrorForServiceHealthyWithHealthCheck(t *testing.T) {
+	c := NewComposeConfig()
+	db := c.AddService("db")
+	db.Image = "postgres:16"
+	db.HealthCheck = &HealthCheck{Test: []string{"CMD-SHELL", "pg_isready -U postgres"}}
+	app := c.AddService("app")
+	app.Image = "myapp:1.0"
+	app.DependsOn = []DependsOnEntry{{Service: "db", Condition: CondServiceHealthy}}
+	r := c.Validate()
+	if hasError(r, "depends_on") {
+		t.Fatalf("did not expect a depends_on error, got %+v", r.Errors)
+	}
+}
+
+func TestValidateNoErrorForServiceStartedWithNoHealthCheck(t *testing.T) {
+	// service_started never needs the target to have a healthcheck —
+	// only service_healthy does.
+	c := NewComposeConfig()
+	db := c.AddService("db")
+	db.Image = "postgres:16"
+	app := c.AddService("app")
+	app.Image = "myapp:1.0"
+	app.DependsOn = []DependsOnEntry{{Service: "db", Condition: CondServiceStarted}}
+	r := c.Validate()
+	if hasError(r, "depends_on") {
+		t.Fatalf("did not expect a depends_on error for condition service_started, got %+v", r.Errors)
+	}
+}
+
+func TestFormatHealthCheckTest(t *testing.T) {
+	got := formatHealthCheckTest([]string{"CMD", "redis-cli", "ping"})
+	want := `["CMD", "redis-cli", "ping"]`
+	if got != want {
+		t.Errorf("formatHealthCheckTest(...) = %q, want %q", got, want)
+	}
+}

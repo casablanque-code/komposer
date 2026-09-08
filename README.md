@@ -47,12 +47,16 @@ file.
   "komposer thinks this is risky" and "Docker Compose would reject
   this outright" never get confused with one another:
   - **Errors** — komposer's own required-field, port-format,
-    restart-policy, and `depends_on`-reference checks,
+    restart-policy, and `depends_on`-reference checks (including a
+    `depends_on: condition: service_healthy` that points at a service
+    with no healthcheck configured — Compose refuses to start that
+    stack, so this is an Error rather than a Warning),
   - **Warnings** — non-blocking advisories: a port published on every
     network interface (Docker's default) with a suggested
     `127.0.0.1:...` fix, an environment variable that looks like a
     secret (by name) with an empty or hardcoded value, a recognized
-    database/stateful image with no volume configured, Postgres
+    database/stateful image with no volume configured or no
+    healthcheck configured, Postgres
     published on the network with no `POSTGRES_PASSWORD` set, an
     image with no tag (or an explicit `:latest`) — either resolves to
     whatever `latest` happens to point to right now, which can pull a
