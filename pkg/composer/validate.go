@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // ValidationError represents a single validation issue. It's used for
@@ -66,6 +68,23 @@ var portPattern = regexp.MustCompile(`^(\d+:)?\d+(/tcp|/udp)?$`)
 // secretEnvKeyPattern matches environment variable names that
 // conventionally hold a sensitive value.
 var secretEnvKeyPattern = regexp.MustCompile(`(?i)(password|secret|token|api[_-]?key|private[_-]?key|access[_-]?key)`)
+
+// dangerousCapabilities are Linux capabilities that, added via
+// cap_add, meaningfully widen a container's access to the host beyond
+// Docker's already-reduced default set — roughly comparable in effect
+// to 'privileged: true' for the specific things they each unlock
+// (arbitrary device/kernel access, host networking config, tracing
+// other processes, loading kernel modules). Not every capability is
+// flagged: most of Docker's default-dropped set (e.g. NET_RAW,
+// SYS_CHROOT) is routine for images that need it and not worth
+// warning about.
+var dangerousCapabilities = map[string]bool{
+	"ALL":        true,
+	"SYS_ADMIN":  true,
+	"NET_ADMIN":  true,
+	"SYS_PTRACE": true,
+	"SYS_MODULE": true,
+}
 
 // Validate checks the entire ComposeConfig for common errors.
 func (c *ComposeConfig) Validate() ValidationResult {
@@ -201,6 +220,62 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 
 	if cfg.User == "root" || cfg.User == "0" {
 		result.AddWarning(name, "user", "explicitly runs as 'root' — consider a non-root user if the image supports it")
+	}
+
+	// The remaining checks below all read from cfg.Extra rather than a
+	// dedicated struct field, since none of cap_add/network_mode/pid/
+	// security_opt have one yet (see ServiceConfig.Extra) — same
+	// pattern import.go's decodeScalarList already uses for anything
+	// modeled as a plain list of scalars.
+
+	// A bind-mounted Docker socket is a well-known container-escape
+	// vector: whoever can reach this container can talk to the host's
+	// Docker daemon directly, which is equivalent to root on the host.
+	// Legitimate uses exist (Portainer, Watchtower, CI runners), so
+	// this is advisory, same as 'privileged' above.
+	for _, vol := range cfg.Volumes {
+		if strings.Contains(vol, "/var/run/docker.sock") {
+			result.AddWarning(name, "volumes",
+				"mounts the Docker socket ('/var/run/docker.sock') — anyone who can reach this "+
+					"container can control the host's Docker daemon, which is equivalent to root on "+
+					"the host; only do this if the service genuinely needs it (e.g. Portainer, Watchtower)")
+			break
+		}
+	}
+
+	if capNode, ok := cfg.Extra["cap_add"]; ok {
+		if caps, ok := decodeScalarList(&capNode); ok {
+			for _, capName := range caps {
+				if dangerousCapabilities[strings.ToUpper(strings.TrimSpace(capName))] {
+					result.AddWarning(name, "cap_add", fmt.Sprintf(
+						"adds capability '%s' — this significantly widens what the container can do "+
+							"to the host; only add capabilities the service specifically needs",
+						capName))
+				}
+			}
+		}
+	}
+
+	if modeNode, ok := cfg.Extra["network_mode"]; ok && modeNode.Kind == yaml.ScalarNode && strings.EqualFold(modeNode.Value, "host") {
+		result.AddWarning(name, "network_mode",
+			"runs with 'network_mode: host' — this removes network isolation between the container "+
+				"and the host; only use it if the service genuinely needs it")
+	}
+
+	if pidNode, ok := cfg.Extra["pid"]; ok && pidNode.Kind == yaml.ScalarNode && strings.EqualFold(pidNode.Value, "host") {
+		result.AddWarning(name, "pid",
+			"runs with 'pid: host' — the container can see and interact with every process on the host")
+	}
+
+	if secOptNode, ok := cfg.Extra["security_opt"]; ok {
+		if opts, ok := decodeScalarList(&secOptNode); ok {
+			for _, opt := range opts {
+				if strings.Contains(strings.ToLower(opt), "unconfined") {
+					result.AddWarning(name, "security_opt", fmt.Sprintf(
+						"'%s' disables a security sandbox (seccomp/AppArmor) for this container", opt))
+				}
+			}
+		}
 	}
 
 	for _, env := range cfg.Environment {

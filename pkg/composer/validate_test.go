@@ -3,6 +3,8 @@ package composer
 import (
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func hasError(r ValidationResult, field string) bool {
@@ -413,5 +415,127 @@ func TestParseImageTag(t *testing.T) {
 			t.Errorf("parseImageTag(%q) = (%q, %v), want (%q, %v)",
 				tc.image, tag, pinned, tc.wantTag, tc.wantPinned)
 		}
+	}
+}
+
+func TestValidateWarnsOnDockerSocketMount(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("portainer")
+	svc.Image = "portainer/portainer-ce"
+	svc.Volumes = []string{"/var/run/docker.sock:/var/run/docker.sock"}
+	r := c.Validate()
+	if !hasWarning(r, "volumes") {
+		t.Fatalf("expected a volumes warning for a Docker socket mount, got %+v", r.Warnings)
+	}
+}
+
+func TestValidateNoWarningForOrdinaryVolume(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx:1.27.3"
+	svc.Volumes = []string{"web_data:/usr/share/nginx/html"}
+	r := c.Validate()
+	if hasWarning(r, "volumes") {
+		t.Fatalf("did not expect a volumes warning, got %+v", r.Warnings)
+	}
+}
+
+func setServiceExtra(t *testing.T, svc *ServiceConfig, key string, value interface{}) {
+	t.Helper()
+	node, err := toNode(value)
+	if err != nil {
+		t.Fatalf("toNode(%v): %v", value, err)
+	}
+	if svc.Extra == nil {
+		svc.Extra = map[string]yaml.Node{}
+	}
+	svc.Extra[key] = *node
+}
+
+func TestValidateWarnsOnDangerousCapability(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx:1.27.3"
+	setServiceExtra(t, svc, "cap_add", []string{"SYS_ADMIN"})
+	r := c.Validate()
+	if !hasWarning(r, "cap_add") {
+		t.Fatalf("expected a cap_add warning for SYS_ADMIN, got %+v", r.Warnings)
+	}
+}
+
+func TestValidateNoWarningForRoutineCapability(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx:1.27.3"
+	setServiceExtra(t, svc, "cap_add", []string{"NET_BIND_SERVICE"})
+	r := c.Validate()
+	if hasWarning(r, "cap_add") {
+		t.Fatalf("did not expect a cap_add warning for a routine capability, got %+v", r.Warnings)
+	}
+}
+
+func TestValidateWarnsOnCapAddAll(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx:1.27.3"
+	setServiceExtra(t, svc, "cap_add", []string{"ALL"})
+	r := c.Validate()
+	if !hasWarning(r, "cap_add") {
+		t.Fatalf("expected a cap_add warning for ALL, got %+v", r.Warnings)
+	}
+}
+
+func TestValidateWarnsOnNetworkModeHost(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx:1.27.3"
+	setServiceExtra(t, svc, "network_mode", "host")
+	r := c.Validate()
+	if !hasWarning(r, "network_mode") {
+		t.Fatalf("expected a network_mode warning for host, got %+v", r.Warnings)
+	}
+}
+
+func TestValidateNoWarningForNetworkModeBridge(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx:1.27.3"
+	setServiceExtra(t, svc, "network_mode", "bridge")
+	r := c.Validate()
+	if hasWarning(r, "network_mode") {
+		t.Fatalf("did not expect a network_mode warning for bridge, got %+v", r.Warnings)
+	}
+}
+
+func TestValidateWarnsOnPidHost(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx:1.27.3"
+	setServiceExtra(t, svc, "pid", "host")
+	r := c.Validate()
+	if !hasWarning(r, "pid") {
+		t.Fatalf("expected a pid warning for host, got %+v", r.Warnings)
+	}
+}
+
+func TestValidateWarnsOnSecurityOptUnconfined(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx:1.27.3"
+	setServiceExtra(t, svc, "security_opt", []string{"seccomp:unconfined"})
+	r := c.Validate()
+	if !hasWarning(r, "security_opt") {
+		t.Fatalf("expected a security_opt warning for seccomp:unconfined, got %+v", r.Warnings)
+	}
+}
+
+func TestValidateNoWarningForOrdinarySecurityOpt(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx:1.27.3"
+	setServiceExtra(t, svc, "security_opt", []string{"no-new-privileges:true"})
+	r := c.Validate()
+	if hasWarning(r, "security_opt") {
+		t.Fatalf("did not expect a security_opt warning, got %+v", r.Warnings)
 	}
 }

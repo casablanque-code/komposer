@@ -58,7 +58,12 @@ file.
     whatever `latest` happens to point to right now, which can pull a
     different image on every `docker compose pull` with no change to
     the file itself; a digest reference (`image@sha256:...`) doesn't
-    trigger this, since it's already fully pinned,
+    trigger this, since it's already fully pinned, a bind-mounted
+    Docker socket (`/var/run/docker.sock`), `cap_add`ing a capability
+    that meaningfully widens host access (`ALL`, `SYS_ADMIN`,
+    `NET_ADMIN`, `SYS_PTRACE`, `SYS_MODULE`), `network_mode: host`,
+    `pid: host`, and a `security_opt` that disables seccomp/AppArmor
+    confinement,
   - **Compose specification** — checked against the official
     [Compose Specification JSON Schema](https://github.com/compose-spec/compose-spec/blob/master/schema/compose-spec.json)
     (vendored under `pkg/composer/schema/`), independent of the two
