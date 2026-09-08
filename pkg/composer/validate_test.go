@@ -329,3 +329,89 @@ func TestSuggestLocalhostPort(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateWarnsOnImageWithNoTag(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx"
+	r := c.Validate()
+	if !hasWarning(r, "image") {
+		t.Fatalf("expected an image warning for an untagged image, got %+v", r.Warnings)
+	}
+}
+
+func TestValidateWarnsOnImageExplicitlyLatest(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx:latest"
+	r := c.Validate()
+	if !hasWarning(r, "image") {
+		t.Fatalf("expected an image warning for ':latest', got %+v", r.Warnings)
+	}
+}
+
+func TestValidateNoImageWarningForPinnedTag(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx:1.27.3"
+	r := c.Validate()
+	if hasWarning(r, "image") {
+		t.Fatalf("did not expect an image warning for a pinned tag, got %+v", r.Warnings)
+	}
+}
+
+func TestValidateNoImageWarningForDigest(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx@sha256:2d2a2257c6e9d2e5b5b0e5b8f9e0d1e7e1f6a6b4c3d2e1f0a9b8c7d6e5f4a3b2"
+	r := c.Validate()
+	if hasWarning(r, "image") {
+		t.Fatalf("did not expect an image warning for a digest reference, got %+v", r.Warnings)
+	}
+}
+
+func TestValidateNoImageWarningForRegistryWithPort(t *testing.T) {
+	// The colon in "localhost:5000" is the registry's port, not a tag
+	// separator — this must not be mistaken for a pinned (or missing)
+	// tag based on that colon alone.
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "localhost:5000/myimage:2.1.0"
+	r := c.Validate()
+	if hasWarning(r, "image") {
+		t.Fatalf("did not expect an image warning, got %+v", r.Warnings)
+	}
+}
+
+func TestValidateWarnsOnImageWithNoTagBehindRegistryPort(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "localhost:5000/myimage"
+	r := c.Validate()
+	if !hasWarning(r, "image") {
+		t.Fatalf("expected an image warning for an untagged image behind a registry port, got %+v", r.Warnings)
+	}
+}
+
+func TestParseImageTag(t *testing.T) {
+	cases := []struct {
+		image      string
+		wantTag    string
+		wantPinned bool
+	}{
+		{"nginx", "", false},
+		{"nginx:latest", "latest", false},
+		{"nginx:1.27.3", "1.27.3", false},
+		{"nginx@sha256:abc123", "", true},
+		{"localhost:5000/myimage", "", false},
+		{"localhost:5000/myimage:2.1.0", "2.1.0", false},
+		{"ghcr.io/org/app:v1.2.3", "v1.2.3", false},
+	}
+	for _, tc := range cases {
+		tag, pinned := parseImageTag(tc.image)
+		if tag != tc.wantTag || pinned != tc.wantPinned {
+			t.Errorf("parseImageTag(%q) = (%q, %v), want (%q, %v)",
+				tc.image, tag, pinned, tc.wantTag, tc.wantPinned)
+		}
+	}
+}

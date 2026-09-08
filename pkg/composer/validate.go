@@ -112,6 +112,29 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 		result.Add(name, "image/build", "cannot specify both 'image' and 'build'")
 	}
 
+	// An image with no tag at all, or an explicit ':latest', both
+	// resolve to whatever 'latest' happens to point to right now —
+	// Docker Compose doesn't pin anything for you. That's a common
+	// footgun: the same compose file can quietly pull a different
+	// image on every `docker compose pull`/`up`, with no diff in the
+	// file to explain why something changed. A digest reference
+	// (image@sha256:...) is the one case that's already fully pinned,
+	// so it's excluded rather than flagged.
+	if cfg.Image != "" {
+		if tag, pinned := parseImageTag(cfg.Image); !pinned {
+			switch tag {
+			case "":
+				result.AddWarning(name, "image", fmt.Sprintf(
+					"'%s' has no tag — Docker defaults to ':latest', which can pull a different image on every 'docker compose pull' with no change to this file; pin an explicit version",
+					cfg.Image))
+			case "latest":
+				result.AddWarning(name, "image", fmt.Sprintf(
+					"'%s' is explicitly pinned to ':latest', which can still pull a different image on every 'docker compose pull' with no change to this file; pin an explicit version instead",
+					cfg.Image))
+			}
+		}
+	}
+
 	// Validate port formats
 	for _, port := range cfg.Ports {
 		if !isValidPort(port) {
@@ -376,6 +399,29 @@ var databaseDataDirs = []struct {
 	{"elasticsearch", "/usr/share/elasticsearch/data"},
 	{"cassandra", "/var/lib/cassandra"},
 	{"couchdb", "/opt/couchdb/data"},
+}
+
+// parseImageTag extracts the tag portion of a Docker image reference,
+// the way Docker itself resolves it: only the segment after the LAST
+// '/' is considered (so a registry-with-port prefix like
+// "localhost:5000/myimage" isn't mistaken for a tag — that colon is
+// part of the registry host, not the image name), and only a colon
+// within that final segment counts. pinned is true for a digest
+// reference (image@sha256:...), which needs no tag at all to be fully
+// reproducible; tag is "" when there's no tag and no digest, which is
+// exactly the case Docker itself defaults to ":latest" for.
+func parseImageTag(image string) (tag string, pinned bool) {
+	if strings.Contains(image, "@") {
+		return "", true
+	}
+	name := image
+	if idx := strings.LastIndex(image, "/"); idx >= 0 {
+		name = image[idx+1:]
+	}
+	if idx := strings.LastIndex(name, ":"); idx >= 0 {
+		return name[idx+1:], false
+	}
+	return "", false
 }
 
 // suggestedDataDir reports the conventional data directory for a known

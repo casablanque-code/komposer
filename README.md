@@ -53,7 +53,12 @@ file.
     `127.0.0.1:...` fix, an environment variable that looks like a
     secret (by name) with an empty or hardcoded value, a recognized
     database/stateful image with no volume configured, Postgres
-    published on the network with no `POSTGRES_PASSWORD` set,
+    published on the network with no `POSTGRES_PASSWORD` set, an
+    image with no tag (or an explicit `:latest`) — either resolves to
+    whatever `latest` happens to point to right now, which can pull a
+    different image on every `docker compose pull` with no change to
+    the file itself; a digest reference (`image@sha256:...`) doesn't
+    trigger this, since it's already fully pinned,
   - **Compose specification** — checked against the official
     [Compose Specification JSON Schema](https://github.com/compose-spec/compose-spec/blob/master/schema/compose-spec.json)
     (vendored under `pkg/composer/schema/`), independent of the two
