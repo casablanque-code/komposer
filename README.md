@@ -93,6 +93,19 @@ file.
 
 ## Install
 
+### Install script (Linux, macOS)
+
+```
+curl -fsSL https://raw.githubusercontent.com/casablanque-code/komposer/main/install.sh | bash
+```
+
+Detects your OS/arch, downloads the matching release archive, verifies
+it against the release's `checksums.txt`, and installs `komposer` to
+`/usr/local/bin` (using `sudo` if that isn't writable without it).
+Pin a specific release instead of always tracking latest with
+`KOMPOSER_VERSION=v0.3.0 curl ... | bash`. Windows isn't covered by
+this script — see the prebuilt-binary instructions below.
+
 ### Download a prebuilt binary (Linux, macOS, Windows)
 
 Grab the archive for your platform from the
