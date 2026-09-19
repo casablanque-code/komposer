@@ -8,10 +8,15 @@ plus its admin UI, a blog platform plus its database, and so on) in a
 single keystroke. Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea)
 and [Lipgloss](https://github.com/charmbracelet/lipgloss).
 
-It also validates what you build as you go — not just YAML syntax, but
-common Docker footguns: ports quietly published on every network
-interface, an empty or hardcoded secret, a database with no volume
-(so its data disappears the moment the container is recreated).
+It also validates what you build as you go — not just against
+komposer's own opinionated rules (ports quietly published on every
+network interface, an empty or hardcoded secret, a database with no
+volume or no healthcheck, an unpinned image tag, a handful of
+container-security footguns), but against the official Compose
+Specification schema too, so you know whether Docker Compose itself
+would actually accept the file. When a secret's hardcoded, you can fix
+it on the spot — move it to a `.env` file or a proper Compose
+`secrets:` entry — without leaving the validation report.
 
 It's also safe to use as a viewer/editor on a `compose.yaml` (or `docker-compose.yml`) you
 already have. Import keeps every field verbatim, including ones this
@@ -51,23 +56,26 @@ file.
     `depends_on: condition: service_healthy` that points at a service
     with no healthcheck configured — Compose refuses to start that
     stack, so this is an Error rather than a Warning),
-  - **Warnings** — non-blocking advisories: a port published on every
-    network interface (Docker's default) with a suggested
-    `127.0.0.1:...` fix, an environment variable that looks like a
-    secret (by name) with an empty or hardcoded value, a recognized
-    database/stateful image with no volume configured or no
-    healthcheck configured, Postgres
-    published on the network with no `POSTGRES_PASSWORD` set, an
-    image with no tag (or an explicit `:latest`) — either resolves to
-    whatever `latest` happens to point to right now, which can pull a
-    different image on every `docker compose pull` with no change to
-    the file itself; a digest reference (`image@sha256:...`) doesn't
-    trigger this, since it's already fully pinned, a bind-mounted
-    Docker socket (`/var/run/docker.sock`), `cap_add`ing a capability
-    that meaningfully widens host access (`ALL`, `SYS_ADMIN`,
-    `NET_ADMIN`, `SYS_PTRACE`, `SYS_MODULE`), `network_mode: host`,
-    `pid: host`, and a `security_opt` that disables seccomp/AppArmor
-    confinement,
+  - **Warnings** — non-blocking advisories:
+    - a port published on every network interface (Docker's default),
+      with a suggested `127.0.0.1:...` fix
+    - an environment variable that looks like a secret (by name) with
+      an empty or hardcoded value — fixable on the spot, see the
+      secrets picker below
+    - a recognized database/stateful image with no volume configured
+      or no healthcheck configured (with a suggested one spelled out)
+    - Postgres published on the network with no `POSTGRES_PASSWORD` set
+    - an image with no tag, or an explicit `:latest` — either resolves
+      to whatever `latest` happens to point to right now, which can
+      pull a different image on every `docker compose pull` with no
+      change to the file itself (a digest reference,
+      `image@sha256:...`, doesn't trigger this, since it's already
+      fully pinned)
+    - a bind-mounted Docker socket (`/var/run/docker.sock`)
+    - `cap_add`ing a capability that meaningfully widens host access
+      (`ALL`, `SYS_ADMIN`, `NET_ADMIN`, `SYS_PTRACE`, `SYS_MODULE`)
+    - `network_mode: host` or `pid: host`
+    - a `security_opt` that disables seccomp/AppArmor confinement
   - **Compose specification** — checked against the official
     [Compose Specification JSON Schema](https://github.com/compose-spec/compose-spec/blob/master/schema/compose-spec.json)
     (vendored under `pkg/composer/schema/`), independent of the two
@@ -75,6 +83,15 @@ file.
 
   Warnings never block saving — they're advisory, shown separately
   from hard errors.
+- **Secrets picker** — from the validation report, a hardcoded or
+  empty secret can be fixed right there instead of just flagged:
+  `Enter` on a fixable warning offers converting it to `.env`
+  substitution (`KEY=${KEY}`, value moved to a `.env` file komposer
+  writes/updates) or to a proper Compose `secrets:` entry (a
+  file-backed secret under `./secrets/`, referenced from the service
+  instead of sitting in `environment:` at all) — or leaving it as is.
+  The report re-validates immediately after, so the warning's gone (or
+  not) without reopening the dialog.
 - **Import** (`Ctrl+O`) an existing `compose.yaml` or `docker-compose.yml` — parses the
   raw YAML tree rather than a fixed struct, so any field this tool
   doesn't have explicit support for is captured and re-emitted
@@ -152,7 +169,7 @@ go install github.com/casablanque-code/komposer@latest
 
 This puts a `komposer` binary in `$(go env GOPATH)/bin` — make sure
 that's on your `PATH`. Installs a specific version instead of the
-latest with `@vX.Y.Z` (e.g. `@v0.1.0`).
+latest with `@vX.Y.Z` (e.g. `@v0.3.0`).
 
 ### From source
 
@@ -204,7 +221,7 @@ with `go run .` instead, if you'd rather not produce a binary.
 | Key | Action |
 |---|---|
 | `Ctrl+P` | open the preset/stack picker — `←`/`→` switches between the **Presets** and **Stacks** tabs, `↑`/`↓` navigates, `Enter` adds the selection |
-| `Ctrl+V` | run validation — shows errors and warnings for the current config, scrollable with `↑`/`↓` or the mouse wheel |
+| `Ctrl+V` | run validation — errors, warnings, and Compose spec conformance for the current config; `↑`/`↓` or the mouse wheel scroll (and select a fixable warning, tracked by the scrollbar on the right), `Enter` on one opens the secrets picker (`.env` / Compose secret / keep as is) |
 | `Ctrl+O` | import an existing `compose.yaml` or `docker-compose.yml` |
 
 ### Saving and quitting
