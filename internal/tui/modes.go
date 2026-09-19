@@ -87,6 +87,13 @@ type validationDialog struct {
 	// "no POSTGRES_PASSWORD set at all" advisory, which has no
 	// existing environment entry to convert) are left nil here.
 	secretRefs []*composer.HardcodedSecret
+	// healthCheckRefs is parallel to warnings the same way secretRefs
+	// is: non-nil when warnings[i] is the "no healthcheck configured"
+	// advisory for a recognized database image and a suggestion
+	// exists to apply (see ComposeConfig.SuggestedHealthCheck). Unlike
+	// secrets there's only one way to fix this, so Enter applies it
+	// directly instead of opening a picker — see updateValidation.
+	healthCheckRefs []*composer.HealthCheckSuggestion
 	// selectedWarning is which entry in warnings/secretRefs is
 	// currently under the cursor — Up/Down move it directly, one
 	// warning at a time, auto-scrolling it into view (see

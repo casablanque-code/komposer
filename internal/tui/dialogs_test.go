@@ -242,3 +242,44 @@ func TestUpdateValidation_EscClosesDialog(t *testing.T) {
 		t.Fatalf("currentMode = %v, want modeNormal after Esc", got.currentMode)
 	}
 }
+
+func TestUpdateValidation_EnterOnHealthCheckWarningAppliesSuggestion(t *testing.T) {
+	cfg := composer.NewComposeConfig()
+	svc := cfg.AddService("db")
+	svc.Image = "postgres:16"
+	hc, ok := cfg.SuggestedHealthCheck("db")
+	if !ok {
+		t.Fatalf("setup: expected a suggestion for postgres")
+	}
+
+	m := Model{
+		height:      40,
+		config:      cfg,
+		currentMode: modeValidation,
+		validationDialog: validationDialog{
+			warnings:        []string{"db has no healthcheck configured"},
+			secretRefs:      []*composer.HardcodedSecret{nil},
+			healthCheckRefs: []*composer.HealthCheckSuggestion{{Service: "db", Check: hc}},
+			selectedWarning: 0,
+		},
+	}
+
+	next, _ := m.updateValidation(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(Model)
+
+	if svc.HealthCheck == nil {
+		t.Fatalf("expected the healthcheck to be applied to the service")
+	}
+	// Doesn't open a sub-dialog the way the secrets picker does —
+	// there's only one fix, so Enter applies it immediately and stays
+	// in the validation report.
+	if got.currentMode != modeValidation {
+		t.Fatalf("currentMode = %v, want it to stay modeValidation", got.currentMode)
+	}
+	if got.validationDialog.actionMessage == "" {
+		t.Fatalf("expected a non-empty actionMessage confirming the fix")
+	}
+	if got.validationDialog.actionMessageErr {
+		t.Fatalf("actionMessageErr = true, want false (this should succeed)")
+	}
+}
