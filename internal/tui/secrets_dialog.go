@@ -28,8 +28,13 @@ func (m *Model) convertSecretCmd(service, key string, strategy int) tea.Cmd {
 			if err := appendEnvFileLine(".env", line); err != nil {
 				return secretActionResult{err: fmt.Errorf("updating .env: %w", err)}
 			}
-			return secretActionResult{message: fmt.Sprintf(
-				"Moved %s to .env — make sure .env is in your .gitignore.", key)}
+			msg := fmt.Sprintf("Moved %s to .env.", key)
+			if err := ensureGitignoreEntry(".gitignore", ".env"); err != nil {
+				msg += " Couldn't update .gitignore automatically — make sure .env is ignored yourself."
+			} else {
+				msg += " Added .env to .gitignore."
+			}
+			return secretActionResult{message: msg}
 
 		case 1: // Compose secret
 			secretName, path, value, err := m.config.ConvertSecretToComposeSecret(service, key)
@@ -39,13 +44,52 @@ func (m *Model) convertSecretCmd(service, key string, strategy int) tea.Cmd {
 			if err := writeSecretFile(path, value); err != nil {
 				return secretActionResult{err: fmt.Errorf("writing %s: %w", path, err)}
 			}
-			return secretActionResult{message: fmt.Sprintf(
+			msg := fmt.Sprintf(
 				"Moved %s to a Compose secret ('%s', %s) — the service now reads it "+
-					"from /run/secrets/%s instead of the environment; make sure %s is "+
-					"in your .gitignore.", key, secretName, path, secretName, path)}
+					"from /run/secrets/%s instead of the environment.",
+				key, secretName, path, secretName)
+			if err := ensureGitignoreEntry(".gitignore", "secrets/"); err != nil {
+				msg += " Couldn't update .gitignore automatically — make sure secrets/ is ignored yourself."
+			} else {
+				msg += " Added secrets/ to .gitignore."
+			}
+			return secretActionResult{message: msg}
 		}
 		return secretActionResult{}
 	}
+}
+
+// ensureGitignoreEntry appends entry to a .gitignore file as its own
+// line, creating the file if it doesn't exist. If entry (or the same
+// path with/without a trailing slash — ".env" and ".env/" are treated
+// as the same entry, same for "secrets" and "secrets/") is already
+// present on its own line, it's left untouched rather than duplicated.
+// Called right after writing a secret to disk (see convertSecretCmd)
+// so a converted secret doesn't sit there unignored waiting for the
+// person to remember to add it themselves — the whole point of moving
+// it out of the compose file in the first place is to keep it out of
+// version control.
+func ensureGitignoreEntry(path, entry string) error {
+	normalized := strings.TrimSuffix(entry, "/")
+
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, l := range strings.Split(string(existing), "\n") {
+		if strings.TrimSuffix(strings.TrimSpace(l), "/") == normalized {
+			return nil // already ignored — nothing to do
+		}
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = f.WriteString(entry + "\n")
+	return err
 }
 
 // appendEnvFileLine appends a "KEY=value" line to a .env file,
