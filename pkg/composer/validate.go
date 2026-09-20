@@ -579,6 +579,45 @@ func suggestedHealthCheck(image string) (hc HealthCheck, ok bool) {
 	return HealthCheck{}, false
 }
 
+// HealthCheckSuggestion pairs a service name with the healthcheck
+// SuggestedHealthCheck would propose for it — the structured
+// counterpart to the "no healthcheck configured" warning text, same
+// role HardcodedSecret plays for the secret warnings (see secrets.go).
+type HealthCheckSuggestion struct {
+	Service string
+	Check   HealthCheck
+}
+
+// SuggestedHealthCheck is the exported counterpart of
+// suggestedHealthCheck, looked up by service name rather than a bare
+// image string — used by the TUI to offer applying the same
+// suggestion the validation warning already describes, without
+// re-parsing the warning text (see HardcodedSecret/FindHardcodedSecrets
+// in secrets.go for the same pattern applied to secrets). Returns
+// false if the service doesn't exist or its image doesn't match a
+// recognized database.
+func (c *ComposeConfig) SuggestedHealthCheck(serviceName string) (HealthCheck, bool) {
+	svc := c.GetService(serviceName)
+	if svc == nil {
+		return HealthCheck{}, false
+	}
+	return suggestedHealthCheck(svc.Image)
+}
+
+// ApplyHealthCheck sets a service's healthcheck, overwriting any
+// existing one. hc is copied (including its Test slice) so the caller
+// mutating it afterward can't retroactively change what was applied.
+func (c *ComposeConfig) ApplyHealthCheck(serviceName string, hc HealthCheck) error {
+	svc := c.GetService(serviceName)
+	if svc == nil {
+		return fmt.Errorf("service %q not found", serviceName)
+	}
+	applied := hc
+	applied.Test = append([]string(nil), hc.Test...)
+	svc.HealthCheck = &applied
+	return nil
+}
+
 // formatHealthCheckTest renders a healthcheck's Test command the way
 // it'd actually be written in YAML — ["CMD", "redis-cli", "ping"] —
 // for inclusion in a warning message, rather than Go's default slice

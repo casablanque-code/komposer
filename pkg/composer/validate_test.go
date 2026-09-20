@@ -657,3 +657,67 @@ func TestFormatHealthCheckTest(t *testing.T) {
 		t.Errorf("formatHealthCheckTest(...) = %q, want %q", got, want)
 	}
 }
+
+func TestSuggestedHealthCheck_ExportedByServiceName(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("db")
+	svc.Image = "postgres:16"
+	hc, ok := c.SuggestedHealthCheck("db")
+	if !ok {
+		t.Fatalf("expected a suggestion for postgres")
+	}
+	if len(hc.Test) == 0 || hc.Test[0] != "CMD-SHELL" {
+		t.Fatalf("unexpected suggestion: %+v", hc)
+	}
+}
+
+func TestSuggestedHealthCheck_UnknownServiceOrImage(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("web")
+	svc.Image = "nginx:1.27.3"
+	if _, ok := c.SuggestedHealthCheck("web"); ok {
+		t.Fatalf("did not expect a suggestion for nginx")
+	}
+	if _, ok := c.SuggestedHealthCheck("nope"); ok {
+		t.Fatalf("did not expect a suggestion for a nonexistent service")
+	}
+}
+
+func TestApplyHealthCheck(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("db")
+	svc.Image = "postgres:16"
+	hc, _ := c.SuggestedHealthCheck("db")
+	if err := c.ApplyHealthCheck("db", hc); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if svc.HealthCheck == nil || len(svc.HealthCheck.Test) == 0 || svc.HealthCheck.Test[0] != "CMD-SHELL" {
+		t.Fatalf("healthcheck not applied, got %+v", svc.HealthCheck)
+	}
+	// The warning should be gone now that a healthcheck exists.
+	r := c.Validate()
+	if hasWarning(r, "healthcheck") {
+		t.Fatalf("expected the healthcheck warning to be gone after applying, got %+v", r.Warnings)
+	}
+}
+
+func TestApplyHealthCheck_UnknownService(t *testing.T) {
+	c := NewComposeConfig()
+	if err := c.ApplyHealthCheck("nope", HealthCheck{Test: []string{"CMD", "true"}}); err == nil {
+		t.Fatalf("expected an error for an unknown service")
+	}
+}
+
+func TestApplyHealthCheck_CopiesTestSlice(t *testing.T) {
+	c := NewComposeConfig()
+	svc := c.AddService("db")
+	svc.Image = "postgres:16"
+	hc, _ := c.SuggestedHealthCheck("db")
+	if err := c.ApplyHealthCheck("db", hc); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	hc.Test[0] = "MUTATED"
+	if svc.HealthCheck.Test[0] == "MUTATED" {
+		t.Fatalf("ApplyHealthCheck aliased the caller's Test slice instead of copying it")
+	}
+}

@@ -1,0 +1,90 @@
+name: Compose Spec schema check
+
+# The JSON Schema behind Compose specification validation
+# (pkg/composer/schema/compose-spec.json) is vendored from
+# compose-spec/compose-spec rather than fetched at runtime — see that
+# file's own doc comment in pkg/composer/spec.go for why. Vendored
+# means it goes stale silently unless something checks for that, which
+# is what this workflow is for: it doesn't touch the vendored copy or
+# fail the build, it just opens (or updates) a tracking issue when
+# upstream has moved.
+
+on:
+  schedule:
+    # Mondays at 06:00 UTC. Monthly would also catch this eventually,
+    # but the schema is source-of-truth for what "valid Compose file"
+    # even means here, so checking weekly costs nothing and keeps the
+    # gap between an upstream change and someone noticing much
+    # smaller.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare vendored schema against upstream
+        id: diff
+        run: |
+          curl -fsSL \
+            https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json \
+            -o /tmp/upstream-compose-spec.json
+
+          if diff -q pkg/composer/schema/compose-spec.json /tmp/upstream-compose-spec.json > /dev/null; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update a tracking issue
+        if: steps.diff.outputs.stale == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="Vendored Compose Spec schema is out of date"
+          EXISTING=$(gh issue list --search "in:title \"$TITLE\"" --state open --json number --jq '.[0].number')
+
+          cat > /tmp/issue-body.md <<'EOF'
+          compose-spec/compose-spec's schema/compose-spec.json (master branch)
+          no longer matches the copy vendored at `pkg/composer/schema/compose-spec.json`.
+
+          To update: download the current schema from
+          https://github.com/compose-spec/compose-spec/blob/master/schema/compose-spec.json,
+          replace `pkg/composer/schema/compose-spec.json` with it, and run
+          `go test ./pkg/composer/...` to make sure nothing in the existing
+          spec-validation tests broke against the new schema.
+
+          Opened automatically by
+          `.github/workflows/compose-spec-schema-check.yml` — closes on its
+          own next run once the vendored copy is updated, no need to close
+          it by hand.
+          EOF
+
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "Still out of date as of $(date -u +%Y-%m-%d)."
+          else
+            # No --label here deliberately: a label like "dependencies"
+            # only exists if the repo happens to have created it, and
+            # `gh issue create` hard-fails on a label that doesn't
+            # exist rather than skipping it — not worth this workflow
+            # breaking over label bookkeeping it doesn't control.
+            gh issue create --title "$TITLE" --body-file /tmp/issue-body.md
+          fi
+
+      - name: Close a stale tracking issue if the schema is current again
+        if: steps.diff.outputs.stale == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="Vendored Compose Spec schema is out of date"
+          EXISTING=$(gh issue list --search "in:title \"$TITLE\"" --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "Vendored schema now matches upstream — closing."
+            gh issue close "$EXISTING"
+          fi

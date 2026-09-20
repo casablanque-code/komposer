@@ -705,12 +705,37 @@ func (m Model) updateValidation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.validationDialog.selectedWarning < 0 {
 			return m, nil
 		}
-		ref := m.validationDialog.secretRefs[m.validationDialog.selectedWarning]
-		if ref == nil {
-			return m, nil
+		idx := m.validationDialog.selectedWarning
+		// Same bounds-checking rationale as buildValidationBodyLines'
+		// fixable check: showValidation always keeps these slices the
+		// same length as warnings, but this shouldn't panic if
+		// something else ever constructs a validationDialog by hand
+		// and leaves one short.
+		if idx < len(m.validationDialog.secretRefs) {
+			if ref := m.validationDialog.secretRefs[idx]; ref != nil {
+				m.secretStrategy = newSecretStrategyDialog(ref.Service, ref.Key, ref.Empty)
+				m.currentMode = modeSecretStrategy
+				return m, nil
+			}
 		}
-		m.secretStrategy = newSecretStrategyDialog(ref.Service, ref.Key, ref.Empty)
-		m.currentMode = modeSecretStrategy
+		if idx < len(m.validationDialog.healthCheckRefs) {
+			if ref := m.validationDialog.healthCheckRefs[idx]; ref != nil {
+				// Unlike secrets, there's only one way to fix this, so
+				// Enter applies it directly instead of opening a
+				// picker — and unlike the secrets conversion, this has
+				// no disk IO of its own (a healthcheck is just part of
+				// the config, written out whenever the file itself is
+				// next saved), so it doesn't need convertSecretCmd's
+				// async tea.Cmd treatment — a plain synchronous
+				// mutation is enough.
+				if err := m.config.ApplyHealthCheck(ref.Service, ref.Check); err == nil {
+					m.showValidation()
+					m.validationDialog.actionMessage = fmt.Sprintf("Added a healthcheck to '%s'.", ref.Service)
+					m.validationDialog.actionMessageErr = false
+				}
+				return m, nil
+			}
+		}
 		return m, nil
 
 	case "up", "k":
@@ -849,6 +874,7 @@ func (m *Model) showValidation() {
 
 	var warnings []string
 	var secretRefs []*composer.HardcodedSecret
+	var healthCheckRefs []*composer.HealthCheckSuggestion
 	for _, w := range result.Warnings {
 		warnings = append(warnings, w.Error())
 		var ref *composer.HardcodedSecret
@@ -868,6 +894,18 @@ func (m *Model) showValidation() {
 			}
 		}
 		secretRefs = append(secretRefs, ref)
+
+		// At most one "no healthcheck configured" warning fires per
+		// service (see validate.go), so there's no ordering puzzle
+		// like the one above for secrets — a direct lookup by service
+		// name is unambiguous.
+		var hcRef *composer.HealthCheckSuggestion
+		if w.Field == "healthcheck" {
+			if hc, ok := m.config.SuggestedHealthCheck(w.Service); ok {
+				hcRef = &composer.HealthCheckSuggestion{Service: w.Service, Check: hc}
+			}
+		}
+		healthCheckRefs = append(healthCheckRefs, hcRef)
 	}
 
 	// Compose Spec conformance is checked independently of the rules
@@ -894,6 +932,7 @@ func (m *Model) showValidation() {
 		errors:          errors,
 		warnings:        warnings,
 		secretRefs:      secretRefs,
+		healthCheckRefs: healthCheckRefs,
 		selectedWarning: selectedWarning,
 		specValid:       specResult.Valid,
 		specIssues:      specResult.Issues,
@@ -1216,7 +1255,7 @@ func (m Model) normalHelpText() string {
 		return "enter: confirm • esc: back"
 	case modeValidation:
 		if len(m.validationDialog.warnings) > 0 {
-			return "↑↓: scroll • enter: convert selected • esc: close"
+			return "↑↓: scroll • enter: fix selected • esc: close"
 		}
 		return "↑↓: scroll • esc: close"
 	case modeSecretStrategy:

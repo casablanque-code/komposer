@@ -506,7 +506,16 @@ func (m Model) buildValidationBodyLines(highlightIdx int) ([]string, []int) {
 			// with, arrow for one it can — so which warnings are
 			// actionable is visible before you ever scroll onto one,
 			// not just discovered by landing on it.
-			fixable := m.validationDialog.secretRefs[i] != nil
+			//
+			// Bounds-checked rather than a bare index: both slices are
+			// always built the same length as warnings by
+			// showValidation in normal operation, but this render path
+			// shouldn't panic if some other caller (a test, most
+			// likely) constructs a validationDialog by hand and leaves
+			// one of them short or nil.
+			secretFixable := i < len(m.validationDialog.secretRefs) && m.validationDialog.secretRefs[i] != nil
+			healthCheckFixable := i < len(m.validationDialog.healthCheckRefs) && m.validationDialog.healthCheckRefs[i] != nil
+			fixable := secretFixable || healthCheckFixable
 			marker := "● "
 			color := colorWarning
 			if fixable {
@@ -709,7 +718,7 @@ func (m Model) renderValidationDialog() string {
 
 	hintText := "↑↓: scroll • Esc: close"
 	if len(m.validationDialog.warnings) > 0 {
-		hintText = "↑↓: scroll • Enter: convert selected • Esc: close"
+		hintText = "↑↓: scroll • Enter: fix selected • Esc: close"
 	}
 	hint := lipgloss.NewStyle().
 		Foreground(colorSubtle).
