@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -123,7 +124,14 @@ func TestWriteSecretFile_CreatesParentDirAndWritesValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if info.Mode().Perm() != 0600 {
-		t.Errorf("mode = %v, want 0600 (secret files are more restrictive than the compose file itself)", info.Mode().Perm())
+	// Windows/NTFS doesn't have POSIX permission bits — os.Stat there
+	// reports a fixed, coarse mode (read-write or read-only) regardless
+	// of what was passed to WriteFile, never a specific 0600, so this
+	// assertion only means anything on platforms that actually have
+	// that permission model.
+	if runtime.GOOS != "windows" {
+		if info.Mode().Perm() != 0600 {
+			t.Errorf("mode = %v, want 0600 (secret files are more restrictive than the compose file itself)", info.Mode().Perm())
+		}
 	}
 }
