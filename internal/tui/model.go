@@ -95,6 +95,14 @@ type Model struct {
 	// first.
 	dirty bool
 
+	// composeDir is the directory of the compose file this session is
+	// bound to: set when a file is imported or successfully saved.
+	// .env, .gitignore and secrets/ are written there, because that is
+	// where Compose resolves them (not the shell's working directory).
+	// Empty until the session is bound to a file; callers then fall
+	// back to the working directory.
+	composeDir string
+
 	quitting bool
 }
 
@@ -172,6 +180,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case saveResult:
 		m.lastSave = msg
 		if msg.err == nil {
+			m.composeDir = dirOf(msg.filename)
 			m.dirty = false
 			m.currentMode = modeSaved
 			m.syncViewportHeight()
@@ -955,6 +964,7 @@ func (m *Model) importFile(path string) error {
 		return err
 	}
 	m.config = imported
+	m.composeDir = dirOf(path)
 	// The working copy now differs from whatever's on disk at the
 	// default save path until it's explicitly saved, same as any other
 	// change — this isn't itself the file at "docker-compose.yml".

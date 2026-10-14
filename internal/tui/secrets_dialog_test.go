@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/casablanque-code/komposer/pkg/composer"
 )
 
 func TestEnsureGitignoreEntry_CreatesFileIfMissing(t *testing.T) {
@@ -133,5 +135,108 @@ func TestWriteSecretFile_CreatesParentDirAndWritesValue(t *testing.T) {
 		if info.Mode().Perm() != 0600 {
 			t.Errorf("mode = %v, want 0600 (secret files are more restrictive than the compose file itself)", info.Mode().Perm())
 		}
+	}
+}
+
+// newSecretTestModel returns a model bound to dir with one service
+// holding a hardcoded POSTGRES_PASSWORD.
+func newSecretTestModel(t *testing.T, dir string) *Model {
+	t.Helper()
+	cfg := composer.NewComposeConfig()
+	svc := cfg.AddService("db")
+	svc.Image = "postgres:16"
+	svc.Environment = []string{"POSTGRES_PASSWORD=hunter2"}
+	return &Model{config: cfg, composeDir: dir}
+}
+
+func TestConvertSecretCmd_EnvFileGoesNextToComposeFile(t *testing.T) {
+	dir := t.TempDir()
+	cwd := t.TempDir()
+	t.Chdir(cwd) // the shell's working directory must stay untouched
+
+	m := newSecretTestModel(t, dir)
+	res := m.convertSecretCmd("db", "POSTGRES_PASSWORD", 0)().(secretActionResult)
+	if res.err != nil {
+		t.Fatalf("unexpected error: %v", res.err)
+	}
+
+	env, err := os.ReadFile(filepath.Join(dir, ".env"))
+	if err != nil {
+		t.Fatalf(".env not written next to compose file: %v", err)
+	}
+	if string(env) != "POSTGRES_PASSWORD=hunter2\n" {
+		t.Fatalf(".env = %q", env)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".gitignore")); err != nil {
+		t.Fatalf(".gitignore not written next to compose file: %v", err)
+	}
+	for _, name := range []string{".env", ".gitignore"} {
+		if _, err := os.Stat(filepath.Join(cwd, name)); err == nil {
+			t.Fatalf("%s leaked into the working directory", name)
+		}
+	}
+}
+
+func TestConvertSecretCmd_ComposeSecretGoesNextToComposeFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file mode bits are not meaningful on Windows")
+	}
+	dir := t.TempDir()
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	m := newSecretTestModel(t, dir)
+	res := m.convertSecretCmd("db", "POSTGRES_PASSWORD", 1)().(secretActionResult)
+	if res.err != nil {
+		t.Fatalf("unexpected error: %v", res.err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "secrets", "db_postgres_password.txt"))
+	if err != nil {
+		t.Fatalf("secret file not written next to compose file: %v", err)
+	}
+	if string(got) != "hunter2" {
+		t.Fatalf("secret content = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, "secrets")); err == nil {
+		t.Fatal("secrets/ leaked into the working directory")
+	}
+}
+
+func TestConvertSecretCmd_UnboundModelFallsBackToWorkingDir(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	m := newSecretTestModel(t, "")
+	res := m.convertSecretCmd("db", "POSTGRES_PASSWORD", 0)().(secretActionResult)
+	if res.err != nil {
+		t.Fatalf("unexpected error: %v", res.err)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, ".env")); err != nil {
+		t.Fatalf(".env not written to working directory: %v", err)
+	}
+}
+
+func TestImportFile_BindsComposeDir(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "compose.yaml")
+	if err := os.WriteFile(path, []byte("services:\n  web:\n    image: nginx:1.27\n"), 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	m := &Model{config: composer.NewComposeConfig()}
+	if err := m.importFile(path); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if m.composeDir != dir {
+		t.Fatalf("composeDir = %q, want %q", m.composeDir, dir)
+	}
+}
+
+func TestSaveResult_BindsComposeDir(t *testing.T) {
+	dir := t.TempDir()
+	m := Model{config: composer.NewComposeConfig(), dirty: true}
+	next, _ := m.Update(saveResult{filename: filepath.Join(dir, "compose.yaml")})
+	if got := next.(Model).composeDir; got != dir {
+		t.Fatalf("composeDir = %q, want %q", got, dir)
 	}
 }
