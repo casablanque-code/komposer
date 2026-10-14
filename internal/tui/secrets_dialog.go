@@ -18,6 +18,9 @@ import (
 // ConvertSecretToEnvFile/ConvertSecretToComposeSecret only mutate the
 // in-memory config and hand back what needs writing.
 func (m *Model) convertSecretCmd(service, key string, strategy int) tea.Cmd {
+	// Captured now, not inside the closure: the command runs later on
+	// another goroutine, and the model may have been copied by then.
+	dir := m.composeDir
 	return func() tea.Msg {
 		switch strategy {
 		case 0: // .env
@@ -25,11 +28,11 @@ func (m *Model) convertSecretCmd(service, key string, strategy int) tea.Cmd {
 			if err != nil {
 				return secretActionResult{err: err}
 			}
-			if err := appendEnvFileLine(".env", line); err != nil {
+			if err := appendEnvFileLine(filepath.Join(dir, ".env"), line); err != nil {
 				return secretActionResult{err: fmt.Errorf("updating .env: %w", err)}
 			}
 			msg := fmt.Sprintf("Moved %s to .env.", key)
-			if err := ensureGitignoreEntry(".gitignore", ".env"); err != nil {
+			if err := ensureGitignoreEntry(filepath.Join(dir, ".gitignore"), ".env"); err != nil {
 				msg += " Couldn't update .gitignore automatically — make sure .env is ignored yourself."
 			} else {
 				msg += " Added .env to .gitignore."
@@ -41,14 +44,17 @@ func (m *Model) convertSecretCmd(service, key string, strategy int) tea.Cmd {
 			if err != nil {
 				return secretActionResult{err: err}
 			}
-			if err := writeSecretFile(path, value); err != nil {
+			// path is "./secrets/<name>.txt", relative to the compose
+			// file (that is how the top-level secrets: entry refers to
+			// it), so it is written relative to the compose file too.
+			if err := writeSecretFile(filepath.Join(dir, path), value); err != nil {
 				return secretActionResult{err: fmt.Errorf("writing %s: %w", path, err)}
 			}
 			msg := fmt.Sprintf(
 				"Moved %s to a Compose secret ('%s', %s) — the service now reads it "+
 					"from /run/secrets/%s instead of the environment.",
 				key, secretName, path, secretName)
-			if err := ensureGitignoreEntry(".gitignore", "secrets/"); err != nil {
+			if err := ensureGitignoreEntry(filepath.Join(dir, ".gitignore"), "secrets/"); err != nil {
 				msg += " Couldn't update .gitignore automatically — make sure secrets/ is ignored yourself."
 			} else {
 				msg += " Added secrets/ to .gitignore."
@@ -57,6 +63,15 @@ func (m *Model) convertSecretCmd(service, key string, strategy int) tea.Cmd {
 		}
 		return secretActionResult{}
 	}
+}
+
+// dirOf returns the absolute directory of a compose file path, or the
+// plain directory part if the working directory can't be resolved.
+func dirOf(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return filepath.Dir(abs)
+	}
+	return filepath.Dir(path)
 }
 
 // ensureGitignoreEntry appends entry to a .gitignore file as its own
