@@ -140,22 +140,32 @@ func parseService(node *yaml.Node) (*ServiceConfig, error) {
 				setExtra(svc, "build", valueNode)
 			}
 
-		case "ports":
-			if list, ok := decodeScalarList(valueNode); ok {
-				svc.Ports = list
-			} else {
-				// Long syntax (list of target/published/protocol
-				// mappings) — preserved verbatim via Extra.
-				setExtra(svc, "ports", valueNode)
-			}
-
-		case "volumes":
-			if list, ok := decodeScalarList(valueNode); ok {
-				svc.Volumes = list
-			} else {
-				// Long syntax (list of type/source/target mappings)
-				// — preserved verbatim via Extra.
-				setExtra(svc, "volumes", valueNode)
+		case "ports", "volumes":
+			// Short-syntax entries (plain strings) go into the modeled
+			// field the form edits; long-syntax entries (mappings with
+			// target/published/source/...) are kept verbatim in Extra
+			// as a sequence of their own. ExportYAML merges the two
+			// back into one list, so a list mixing both syntaxes — or
+			// a long-syntax list the user then adds a short entry to
+			// through the form — survives instead of producing a
+			// duplicate key or losing entries.
+			shorts, longs, ok := splitMixedList(valueNode)
+			switch {
+			case !ok:
+				setExtra(svc, key, valueNode)
+			default:
+				if key == "ports" {
+					svc.Ports = shorts
+				} else {
+					svc.Volumes = shorts
+				}
+				if len(longs) > 0 {
+					setExtra(svc, key, &yaml.Node{
+						Kind:    yaml.SequenceNode,
+						Tag:     "!!seq",
+						Content: longs,
+					})
+				}
 			}
 
 		case "environment":
@@ -174,13 +184,15 @@ func parseService(node *yaml.Node) (*ServiceConfig, error) {
 
 		case "healthcheck":
 			var hc HealthCheck
-			if valueNode.Kind == yaml.MappingNode && valueNode.Decode(&hc) == nil {
+			if isModeledHealthcheck(valueNode) && valueNode.Decode(&hc) == nil {
 				svc.HealthCheck = &hc
 			} else {
-				// Covers both a non-mapping healthcheck block and a
-				// `test:` given as its (also valid) plain-string
-				// shorthand rather than a list — neither has a form
-				// field, so both round-trip through Extra.
+				// Anything the form can't represent round-trips
+				// through Extra instead of being narrowed: a `test:`
+				// given as the plain-string shorthand, `disable:
+				// true`, a block with no `test` (which only tunes
+				// the image's own HEALTHCHECK), or any key
+				// HealthCheck has no field for.
 				setExtra(svc, "healthcheck", valueNode)
 			}
 
@@ -202,6 +214,54 @@ func parseService(node *yaml.Node) (*ServiceConfig, error) {
 	}
 
 	return svc, nil
+}
+
+// healthcheckKeys are the healthcheck keys HealthCheck has fields for.
+var healthcheckKeys = map[string]bool{
+	"test": true, "interval": true, "timeout": true, "retries": true,
+	"start_period": true, "start_interval": true,
+}
+
+// isModeledHealthcheck reports whether a healthcheck block can be held in
+// HealthCheck without losing anything: a mapping with a list-form `test`
+// and no keys beyond the ones HealthCheck has fields for. (Decoding a
+// block with other keys into HealthCheck would silently drop them.)
+func isModeledHealthcheck(node *yaml.Node) bool {
+	if node.Kind != yaml.MappingNode {
+		return false
+	}
+	test := keyValue(node, "test")
+	if test == nil || test.Kind != yaml.SequenceNode {
+		return false
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if !healthcheckKeys[node.Content[i].Value] {
+			return false
+		}
+	}
+	return true
+}
+
+// splitMixedList splits a ports/volumes sequence into its short-syntax
+// scalar entries and its long-syntax mapping entries. Reports false for
+// anything else (not a sequence, or items that are neither scalars nor
+// mappings, such as aliases), so the caller can keep the whole node
+// verbatim instead.
+func splitMixedList(node *yaml.Node) (shorts []string, longs []*yaml.Node, ok bool) {
+	if node.Kind != yaml.SequenceNode {
+		return nil, nil, false
+	}
+	for _, item := range node.Content {
+		switch item.Kind {
+		case yaml.ScalarNode:
+			shorts = append(shorts, item.Value)
+		case yaml.MappingNode:
+			longs = append(longs, item)
+		default:
+			return nil, nil, false
+		}
+	}
+	return shorts, longs, true
 }
 
 // decodeScalarList decodes a YAML sequence of plain scalars (the
@@ -260,9 +320,17 @@ func parseEnvironment(node *yaml.Node) ([]string, error) {
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			key := node.Content[i].Value
 			val := node.Content[i+1]
-			if val.Tag == "!!null" || val.Value == "" {
+			switch {
+			case val.Kind != yaml.ScalarNode:
+				return nil, fmt.Errorf("%s: expected a scalar value", key)
+			case val.Tag == "!!null":
+				// `FOO:` / `FOO: null` / `FOO: ~` — pass through from
+				// the host environment.
 				out = append(out, key)
-			} else {
+			default:
+				// Includes `FOO: ""`, which sets the variable to an
+				// empty string — not the same thing as passing it
+				// through, so it must come out as "FOO=".
 				out = append(out, key+"="+val.Value)
 			}
 		}

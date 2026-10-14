@@ -57,14 +57,16 @@ func TestValidateRequiresImageOrBuild(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsBothImageAndBuild(t *testing.T) {
+// image together with build is valid per the Compose Specification: image
+// names what build produces.
+func TestValidateAllowsBothImageAndBuild(t *testing.T) {
 	c := NewComposeConfig()
 	svc := c.AddService("web")
-	svc.Image = "nginx"
+	svc.Image = "registry.example.com/web:1.0"
 	svc.Build = "."
 	r := c.Validate()
-	if !hasError(r, "image/build") {
-		t.Fatalf("expected an image/build error when both are set, got %+v", r.Errors)
+	if hasError(r, "image/build") {
+		t.Fatalf("image together with build must not be an error, got %+v", r.Errors)
 	}
 }
 
