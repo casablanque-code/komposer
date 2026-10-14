@@ -121,7 +121,7 @@ func (c *ComposeConfig) Validate() ValidationResult {
 			// to actually satisfy that condition, so this is an Error
 			// (would break `docker compose up`), not a Warning.
 			if dep.Condition == CondServiceHealthy {
-				if target := c.GetService(dep.Service); target != nil && target.HealthCheck == nil {
+				if target := c.GetService(dep.Service); target != nil && !target.HasHealthCheck() {
 					result.Add(entry.Name, "depends_on", fmt.Sprintf(
 						"depends on '%s' with condition 'service_healthy', but '%s' has no healthcheck configured — "+
 							"Compose will refuse to start this stack; either add a healthcheck to '%s' or "+
@@ -136,14 +136,13 @@ func (c *ComposeConfig) Validate() ValidationResult {
 }
 
 func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result *ValidationResult) {
-	// Either image or build must be specified
-	if cfg.Image == "" && cfg.Build == "" {
+	// Either image or build must be specified. Having both is valid per
+	// the Compose Specification: `image` then names the image that
+	// `build` produces (and is what gets pushed), so it isn't flagged.
+	// HasBuild also sees the mapping form (`build: {context: ...}`),
+	// which isn't held in Build.
+	if cfg.Image == "" && !cfg.HasBuild() {
 		result.Add(name, "image/build", "either 'image' or 'build' must be specified")
-	}
-
-	// Both image and build shouldn't be set simultaneously
-	if cfg.Image != "" && cfg.Build != "" {
-		result.Add(name, "image/build", "cannot specify both 'image' and 'build'")
 	}
 
 	// An image with no tag at all, or an explicit ':latest', both
@@ -207,6 +206,12 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 		if cfg.HealthCheck.Timeout != "" && !isValidDuration(cfg.HealthCheck.Timeout) {
 			result.Add(name, "healthcheck.timeout", fmt.Sprintf("invalid duration: '%s'", cfg.HealthCheck.Timeout))
 		}
+		if cfg.HealthCheck.StartPeriod != "" && !isValidDuration(cfg.HealthCheck.StartPeriod) {
+			result.Add(name, "healthcheck.start_period", fmt.Sprintf("invalid duration: '%s'", cfg.HealthCheck.StartPeriod))
+		}
+		if cfg.HealthCheck.StartInterval != "" && !isValidDuration(cfg.HealthCheck.StartInterval) {
+			result.Add(name, "healthcheck.start_interval", fmt.Sprintf("invalid duration: '%s'", cfg.HealthCheck.StartInterval))
+		}
 	}
 
 	// --- Advisory warnings below. These are all syntactically valid
@@ -219,7 +224,7 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	// Docker's actual default behavior, not a mistake, but it's a
 	// common surprise for anyone who assumed "8080:80" meant
 	// "reachable from this machine only".
-	for _, port := range cfg.Ports {
+	for _, port := range cfg.PortStrings() {
 		if isValidPort(port) && isPortExposedToAllInterfaces(port) {
 			result.AddWarning(name, "ports", fmt.Sprintf(
 				"'%s' is published on all network interfaces (Docker's default) — "+
@@ -248,7 +253,7 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	// Docker daemon directly, which is equivalent to root on the host.
 	// Legitimate uses exist (Portainer, Watchtower, CI runners), so
 	// this is advisory, same as 'privileged' above.
-	for _, vol := range cfg.Volumes {
+	for _, vol := range cfg.VolumeStrings() {
 		if strings.Contains(vol, "/var/run/docker.sock") {
 			result.AddWarning(name, "volumes",
 				"mounts the Docker socket ('/var/run/docker.sock') — anyone who can reach this "+
@@ -315,7 +320,7 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	// — which `docker compose up` does routinely. This only fires for
 	// images recognized as stateful (see databaseDataDirs); it has no
 	// way to know that about an arbitrary custom image.
-	if dir, ok := suggestedDataDir(cfg.Image); ok && len(cfg.Volumes) == 0 {
+	if dir, ok := suggestedDataDir(cfg.Image); ok && !cfg.HasVolumes() {
 		result.AddWarning(name, "volumes", fmt.Sprintf(
 			"'%s' looks like a database with no volumes configured — data will be lost "+
 				"every time the container is removed or recreated; consider a volume such as './data:%s'",
@@ -329,7 +334,7 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	// accept connections. Same recognized-image list as the no-volume
 	// check above; same limitation, too — it has no way to know this
 	// about an arbitrary custom image.
-	if hc, ok := suggestedHealthCheck(cfg.Image); ok && cfg.HealthCheck == nil {
+	if hc, ok := suggestedHealthCheck(cfg.Image); ok && !cfg.HasHealthCheck() {
 		result.AddWarning(name, "healthcheck", fmt.Sprintf(
 			"'%s' looks like a database with no healthcheck configured — anything with "+
 				"'depends_on: %s' can only wait for the process to start, not for it to actually "+
@@ -347,7 +352,7 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	// password env vars if that turns out to be worth it.
 	if strings.Contains(strings.ToLower(cfg.Image), "postgres") {
 		exposed := false
-		for _, port := range cfg.Ports {
+		for _, port := range cfg.PortStrings() {
 			if isValidPort(port) && isPortExposedToAllInterfaces(port) {
 				exposed = true
 				break

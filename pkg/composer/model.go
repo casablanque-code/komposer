@@ -86,10 +86,12 @@ const (
 
 // HealthCheck maps to the docker-compose healthcheck block.
 type HealthCheck struct {
-	Test     []string `yaml:"test"`
-	Interval string   `yaml:"interval,omitempty"`
-	Timeout  string   `yaml:"timeout,omitempty"`
-	Retries  int      `yaml:"retries,omitempty"`
+	Test          []string `yaml:"test"`
+	Interval      string   `yaml:"interval,omitempty"`
+	Timeout       string   `yaml:"timeout,omitempty"`
+	Retries       int      `yaml:"retries,omitempty"`
+	StartPeriod   string   `yaml:"start_period,omitempty"`
+	StartInterval string   `yaml:"start_interval,omitempty"`
 }
 
 // NewComposeConfig returns an empty, ready-to-use ComposeConfig.

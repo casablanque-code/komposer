@@ -47,13 +47,12 @@ func (c *ComposeConfig) ExportYAML() ([]byte, error) {
 
 	// Re-emit any top-level fields this tool doesn't model explicitly
 	// (secrets:, configs:, name:, x-* extensions, ...) exactly as they
-	// came in on import — see ComposeConfig.Extra's doc comment. Map
-	// iteration order is random in Go, so these come out in whatever
-	// order happens to occur this run — acceptable, since the
-	// alternative (losing them outright) is far worse than not
-	// preserving their exact original position among each other.
-	for key, node := range c.Extra {
-		node := node
+	// came in on import — see ComposeConfig.Extra's doc comment. They
+	// come out sorted by key: Extra is a map, so the original relative
+	// order isn't kept, but a stable order keeps saved files free of
+	// run-to-run churn.
+	for _, key := range sortedExtraKeys(c.Extra) {
+		node := c.Extra[key]
 		appendKV(root, key, &node)
 	}
 
@@ -104,10 +103,29 @@ func serviceToNode(svc *ServiceConfig) (*yaml.Node, error) {
 	// ServiceConfig.Extra's doc comment. Without this, importing a real
 	// docker-compose.yml and saving it back through the TUI would
 	// silently drop every field the form doesn't know about, even ones
-	// the user never touched.
-	for key, node := range svc.Extra {
-		node := node
-		appendKV(base, key, &node)
+	// the user never touched. Keys come out sorted, for stable output.
+	//
+	// A few keys exist in both places at once — the modeled field and
+	// Extra — and need reconciling rather than blind appending, which
+	// would emit the same YAML key twice:
+	//   - ports, volumes: Extra holds the long-syntax entries, the
+	//     modeled field the short-syntax ones; they are one list.
+	//   - build, healthcheck: the modeled field is what the user has
+	//     set through the form, so it takes over from the verbatim
+	//     copy kept from import.
+	for _, key := range sortedExtraKeys(svc.Extra) {
+		node := svc.Extra[key]
+		existing := keyValue(base, key)
+		switch {
+		case existing == nil:
+			appendKV(base, key, &node)
+		case (key == "ports" || key == "volumes") &&
+			existing.Kind == yaml.SequenceNode && node.Kind == yaml.SequenceNode:
+			existing.Content = append(existing.Content, node.Content...)
+		default:
+			// build / healthcheck (or any other key a caller set in both
+			// places): the modeled value wins.
+		}
 	}
 
 	return base, nil
