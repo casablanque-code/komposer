@@ -2,6 +2,7 @@ package composer
 
 import (
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -76,7 +77,11 @@ func (s *ServiceConfig) PortStrings() []string {
 		short := target
 		switch {
 		case p["host_ip"] != "":
-			short = p["host_ip"] + ":" + p["published"] + ":" + target
+			ip := p["host_ip"]
+			if strings.Contains(ip, ":") { // IPv6 needs brackets in short syntax
+				ip = "[" + ip + "]"
+			}
+			short = ip + ":" + p["published"] + ":" + target
 		case p["published"] != "":
 			short = p["published"] + ":" + target
 		}
