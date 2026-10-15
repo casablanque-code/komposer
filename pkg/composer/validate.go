@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -171,7 +170,7 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	// Validate port formats
 	for _, port := range cfg.Ports {
 		if !isValidPort(port) {
-			result.Add(name, "ports", fmt.Sprintf("invalid port format: '%s' (expected: [ip:][host:]container[/protocol])", port))
+			result.Add(name, "ports", fmt.Sprintf("invalid port format: '%s' (expected: [ip:][host[-end]:]container[-end][/protocol], IPv6 as [addr])", port))
 		}
 	}
 
@@ -366,86 +365,47 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	}
 }
 
-// isValidPort checks if a port mapping follows docker-compose format:
-//   - "8080"                (container port only)
-//   - "8080:80"              (host:container)
-//   - "127.0.0.1:8080:80"    (ip:host:container)
-//   - "8080/tcp"             (with protocol, any of the above forms)
+// isValidPort checks if a port mapping is valid short syntax:
+//   - "8080"                    (container port only)
+//   - "8080:80"                 (host:container)
+//   - "127.0.0.1:8080:80"       (ip:host:container)
+//   - "127.0.0.1::80"           (ip, random host port)
+//   - "[::1]:8080:80"           (IPv6 needs brackets)
+//   - "8000-8010:8000-8010"     (ranges; a host range may also map to one container port)
+//   - "8080/udp"                (tcp, udp or sctp, with any of the above)
 func isValidPort(port string) bool {
-	port = strings.TrimSpace(port)
-	if port == "" {
-		return false
-	}
-
-	p := strings.TrimSuffix(strings.TrimSuffix(port, "/tcp"), "/udp")
-
-	parts := strings.Split(p, ":")
-	switch len(parts) {
-	case 1:
-		return isValidPortNumber(parts[0])
-	case 2:
-		return isValidPortNumber(parts[0]) && isValidPortNumber(parts[1])
-	case 3:
-		if net.ParseIP(parts[0]) == nil {
-			return false
-		}
-		// The host-port segment of "ip:host:container" may be empty,
-		// meaning "pick a random host port" — e.g. "127.0.0.1::8080".
-		if parts[1] != "" && !isValidPortNumber(parts[1]) {
-			return false
-		}
-		return isValidPortNumber(parts[2])
-	default:
-		return false
-	}
-}
-
-func isValidPortNumber(s string) bool {
-	n, err := strconv.Atoi(s)
-	return err == nil && n >= 1 && n <= 65535
+	_, ok := parsePortSpec(port)
+	return ok
 }
 
 // isPortExposedToAllInterfaces reports whether a ports entry (in any of
 // the valid docker-compose short-syntax forms accepted by isValidPort)
 // binds to every network interface on the host, rather than being
-// restricted to loopback via an explicit "127.0.0.1:..." prefix.
+// restricted to loopback via an explicit "127.0.0.1:..." or "[::1]:..."
+// prefix.
 func isPortExposedToAllInterfaces(port string) bool {
-	p := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(port), "/tcp"), "/udp")
-	parts := strings.Split(p, ":")
-	if len(parts) < 3 {
-		// "8080" or "8080:80" — no host IP given at all, so Docker
-		// binds 0.0.0.0.
+	ps, ok := parsePortSpec(port)
+	if !ok || ps.HostIP == "" {
+		// No host IP given at all, so Docker binds 0.0.0.0.
 		return true
 	}
-	ip := net.ParseIP(parts[0])
-	return !ip.IsLoopback()
+	return !net.ParseIP(ps.HostIP).IsLoopback()
 }
 
-// suggestLocalhostPort rewrites a ports entry to bind to 127.0.0.1
-// instead of all interfaces, preserving whichever short-syntax form it
-// was already using.
+// suggestLocalhostPort rewrites a ports entry to bind to loopback instead
+// of all interfaces, preserving the form it was already using (ranges,
+// protocol, random host port). An entry that already uses an IPv6 address
+// is pointed at [::1], everything else at 127.0.0.1.
 func suggestLocalhostPort(port string) string {
-	proto := ""
-	p := port
-	for _, suf := range []string{"/tcp", "/udp"} {
-		if strings.HasSuffix(p, suf) {
-			proto = suf
-			p = strings.TrimSuffix(p, suf)
-			break
-		}
+	ps, ok := parsePortSpec(port)
+	if !ok {
+		return port
 	}
-
-	parts := strings.Split(p, ":")
-	switch len(parts) {
-	case 1: // "8080" -> "127.0.0.1::8080" (random host port, loopback only)
-		return "127.0.0.1::" + parts[0] + proto
-	case 2: // "8080:80" -> "127.0.0.1:8080:80"
-		return "127.0.0.1:" + parts[0] + ":" + parts[1] + proto
-	case 3: // "0.0.0.0:8080:80" -> "127.0.0.1:8080:80"
-		return "127.0.0.1:" + parts[1] + ":" + parts[2] + proto
-	default:
-		return "127.0.0.1:" + p + proto
+	ip := "127.0.0.1"
+	if strings.Contains(ps.HostIP, ":") {
+		ip = "[::1]"
 	}
+	return ip + ":" + ps.Host + ":" + ps.Container + ps.Proto
 }
 
 // classifySecretEnv looks at an "environment:" entry and, if its key
