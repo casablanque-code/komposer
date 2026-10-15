@@ -232,12 +232,39 @@ with `go run .` instead, if you'd rather not produce a binary.
 | `q` / `Esc` | quit — if there are unsaved changes, opens the same save prompt with an explicit "quit without saving" option; quits immediately otherwise |
 | `Ctrl+C` | quit immediately, no prompt |
 
+### Checking a file without the editor (`komposer check`)
+
+```sh
+komposer check                       # compose.yaml / compose.yml / docker-compose.y(a)ml in the current directory
+komposer check path/to/compose.yaml
+komposer check --strict              # warnings fail too
+komposer check --format json         # machine-readable
+```
+
+Three layers run, the same ones the editor's validation dialog shows:
+**Errors** (komposer's own semantic checks), **Warnings** (security and
+reliability advisories) and **Compose specification** (the official
+JSON schema).
+
+| Exit code | Meaning |
+|---|---|
+| `0` | no errors and no specification issues (with `--strict`: and no warnings) |
+| `1` | problems found |
+| `2` | bad arguments, or the file could not be read |
+
+JSON output has the shape
+`{"file", "strict", "passed", "errors": [...], "warnings": [...], "spec": {"valid", "issues": [...]}}`;
+each finding is `{"service", "field", "message"}`. In a GitHub Actions
+step, `komposer check --strict compose.yaml` is all it takes to gate a
+pull request.
+
 ## Project layout
 
 - `pkg/composer` — the domain model: services, presets, stacks, YAML
   import/export, and validation. No TUI dependencies — usable as a
   library on its own.
 - `internal/tui` — the Bubble Tea/Lipgloss terminal UI.
+- `internal/check` — the non-interactive `komposer check` command.
 
 ## Development
 
