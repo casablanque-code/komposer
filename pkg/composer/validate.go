@@ -131,6 +131,8 @@ func (c *ComposeConfig) Validate() ValidationResult {
 		}
 	}
 
+	c.validateDependencyCycles(&result)
+
 	return result
 }
 
@@ -163,6 +165,12 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 				result.AddWarning(name, "image", fmt.Sprintf(
 					"'%s' is explicitly pinned to ':latest', which can still pull a different image on every 'docker compose pull' with no change to this file; pin an explicit version instead",
 					cfg.Image))
+			default:
+				if isRollingTag(tag) {
+					result.AddWarning(name, "image", fmt.Sprintf(
+						"'%s' uses the rolling tag ':%s', which moves to a new release over time with no change to this file; pin a specific version (or an @sha256 digest for fully reproducible deploys)",
+						cfg.Image, tag))
+				}
 			}
 		}
 	}
@@ -341,28 +349,7 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 			cfg.Image, name, formatHealthCheckTest(hc.Test)))
 	}
 
-	// The single most common "wide open database" mistake: Postgres
-	// published on the network with no password configured at all —
-	// whether POSTGRES_PASSWORD was never set or was set to an empty
-	// value, either one leaves it reachable with no auth from anywhere
-	// that can route to the port. This is deliberately specific to
-	// Postgres for now (it's the concrete case that prompted it); the
-	// same pattern could be extended to MySQL/Mongo/Redis's own
-	// password env vars if that turns out to be worth it.
-	if strings.Contains(strings.ToLower(cfg.Image), "postgres") {
-		exposed := false
-		for _, port := range cfg.PortStrings() {
-			if isValidPort(port) && isPortExposedToAllInterfaces(port) {
-				exposed = true
-				break
-			}
-		}
-		if exposed && !hasNonEmptyEnv(cfg.Environment, "POSTGRES_PASSWORD") {
-			result.AddWarning(name, "environment",
-				"postgres is published on the network with no POSTGRES_PASSWORD set — "+
-					"without one, anyone who can reach this port has full database access")
-		}
-	}
+	validateSecurity(name, cfg, result)
 }
 
 // isValidPort checks if a port mapping is valid short syntax:
