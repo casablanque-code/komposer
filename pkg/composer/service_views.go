@@ -132,3 +132,44 @@ func keyValue(m *yaml.Node, key string) *yaml.Node {
 	}
 	return nil
 }
+
+// mountSpec is a volume mount reduced to what the security checks need.
+type mountSpec struct {
+	Source   string
+	Target   string
+	ReadOnly bool
+}
+
+// Mounts returns every mount of the service, short and long syntax alike.
+// Only bind-style mounts are meaningful to the checks: for short syntax
+// the source is whatever precedes the first colon, so a named volume
+// ("pgdata:/var/lib/...") has a source that is not an absolute path.
+func (s *ServiceConfig) Mounts() []mountSpec {
+	var out []mountSpec
+	for _, v := range s.Volumes {
+		parts := strings.Split(v, ":")
+		if len(parts) < 2 {
+			continue
+		}
+		m := mountSpec{Source: parts[0], Target: parts[1]}
+		if len(parts) >= 3 {
+			for _, opt := range strings.Split(parts[2], ",") {
+				if opt == "ro" {
+					m.ReadOnly = true
+				}
+			}
+		}
+		out = append(out, m)
+	}
+	for _, v := range s.longFormEntries("volumes") {
+		if t := v["type"]; t != "" && t != "bind" {
+			continue
+		}
+		out = append(out, mountSpec{
+			Source:   v["source"],
+			Target:   v["target"],
+			ReadOnly: v["read_only"] == "true",
+		})
+	}
+	return out
+}

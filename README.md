@@ -53,6 +53,7 @@ file.
   this outright" never get confused with one another:
   - **Errors** — komposer's own required-field, port-format,
     restart-policy, and `depends_on`-reference checks (including a
+    `depends_on` cycle, which Compose refuses to start, and a
     `depends_on: condition: service_healthy` that points at a service
     with no healthcheck configured — Compose refuses to start that
     stack, so this is an Error rather than a Warning),
@@ -64,8 +65,14 @@ file.
       secrets picker below
     - a recognized database/stateful image with no volume configured
       or no healthcheck configured (with a suggested one spelled out)
-    - Postgres published on the network with no `POSTGRES_PASSWORD` set
-    - an image with no tag, or an explicit `:latest` — either resolves
+    - a database published on the network with authentication off:
+      Postgres with no password (`POSTGRES_PASSWORD`, `*_FILE` and an
+      `env_file` all count as set), MongoDB with no root user or
+      `--auth`, or `POSTGRES_HOST_AUTH_METHOD=trust` /
+      `MYSQL_ALLOW_EMPTY_PASSWORD` anywhere
+    - an image with no tag, an explicit `:latest`, or another rolling
+      tag (`stable`, `edge`, `main`, `nightly`, `dev`, ... — also with
+      a variant suffix such as `stable-alpine`) — each resolves
       to whatever `latest` happens to point to right now, which can
       pull a different image on every `docker compose pull` with no
       change to the file itself (a digest reference,
@@ -74,8 +81,13 @@ file.
     - a bind-mounted Docker socket (`/var/run/docker.sock`)
     - `cap_add`ing a capability that meaningfully widens host access
       (`ALL`, `SYS_ADMIN`, `NET_ADMIN`, `SYS_PTRACE`, `SYS_MODULE`)
-    - `network_mode: host` or `pid: host`
-    - a `security_opt` that disables seccomp/AppArmor confinement
+    - a sensitive host directory (`/`, `/etc`, `/root`, `/proc`,
+      `/sys`, `/dev`, `/var/lib/docker`, ...) bind-mounted read-write
+      (read-only is fine — that's the monitoring-agent pattern)
+    - `network_mode: host`, `pid: host`, `ipc: host`, `cgroup: host` or
+      `userns_mode: host`
+    - a `security_opt` that disables seccomp/AppArmor confinement or
+      sets `no-new-privileges:false`
   - **Compose specification** — checked against the official
     [Compose Specification JSON Schema](https://github.com/compose-spec/compose-spec/blob/master/schema/compose-spec.json)
     (vendored under `pkg/composer/schema/`), independent of the two
