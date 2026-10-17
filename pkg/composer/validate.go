@@ -14,6 +14,10 @@ import (
 // advisory warnings (valid syntax with a risky or surprising default) —
 // see ValidationResult.Warnings.
 type ValidationError struct {
+	// Rule is the stable ID of the check that produced this finding (see
+	// rules.go). IDs never change once released, so scripts, config
+	// files and `komposer explain` can refer to them.
+	Rule    string
 	Service string // empty for config-level errors
 	Field   string
 	Message string
@@ -45,8 +49,9 @@ func (r ValidationResult) IsValid() bool {
 }
 
 // Add appends a validation error to the result.
-func (r *ValidationResult) Add(service, field, message string) {
+func (r *ValidationResult) Add(rule, service, field, message string) {
 	r.Errors = append(r.Errors, ValidationError{
+		Rule:    rule,
 		Service: service,
 		Field:   field,
 		Message: message,
@@ -54,8 +59,9 @@ func (r *ValidationResult) Add(service, field, message string) {
 }
 
 // AddWarning appends a non-blocking advisory warning to the result.
-func (r *ValidationResult) AddWarning(service, field, message string) {
+func (r *ValidationResult) AddWarning(rule, service, field, message string) {
 	r.Warnings = append(r.Warnings, ValidationError{
+		Rule:    rule,
 		Service: service,
 		Field:   field,
 		Message: message,
@@ -90,7 +96,7 @@ func (c *ComposeConfig) Validate() ValidationResult {
 	result := ValidationResult{}
 
 	if len(c.Services) == 0 {
-		result.Add("", "services", "at least one service is required")
+		result.Add("no-services", "", "services", "at least one service is required")
 		return result
 	}
 
@@ -98,7 +104,7 @@ func (c *ComposeConfig) Validate() ValidationResult {
 	for _, entry := range c.Services {
 		// Check for duplicate service names
 		if serviceNames[entry.Name] {
-			result.Add(entry.Name, "name", "duplicate service name")
+			result.Add("duplicate-service", entry.Name, "name", "duplicate service name")
 			continue
 		}
 		serviceNames[entry.Name] = true
@@ -111,7 +117,7 @@ func (c *ComposeConfig) Validate() ValidationResult {
 	for _, entry := range c.Services {
 		for _, dep := range entry.Config.DependsOn {
 			if !serviceNames[dep.Service] {
-				result.Add(entry.Name, "depends_on", fmt.Sprintf("references non-existent service '%s'", dep.Service))
+				result.Add("depends-on-unknown-service", entry.Name, "depends_on", fmt.Sprintf("references non-existent service '%s'", dep.Service))
 				continue
 			}
 			// condition: service_healthy is a promise, not just a
@@ -121,7 +127,7 @@ func (c *ComposeConfig) Validate() ValidationResult {
 			// (would break `docker compose up`), not a Warning.
 			if dep.Condition == CondServiceHealthy {
 				if target := c.GetService(dep.Service); target != nil && !target.HasHealthCheck() {
-					result.Add(entry.Name, "depends_on", fmt.Sprintf(
+					result.Add("depends-on-healthy-without-healthcheck", entry.Name, "depends_on", fmt.Sprintf(
 						"depends on '%s' with condition 'service_healthy', but '%s' has no healthcheck configured — "+
 							"Compose will refuse to start this stack; either add a healthcheck to '%s' or "+
 							"change the condition to 'service_started'",
@@ -143,7 +149,7 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	// HasBuild also sees the mapping form (`build: {context: ...}`),
 	// which isn't held in Build.
 	if cfg.Image == "" && !cfg.HasBuild() {
-		result.Add(name, "image/build", "either 'image' or 'build' must be specified")
+		result.Add("image-or-build-required", name, "image/build", "either 'image' or 'build' must be specified")
 	}
 
 	// An image with no tag at all, or an explicit ':latest', both
@@ -158,16 +164,16 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 		if tag, pinned := parseImageTag(cfg.Image); !pinned {
 			switch tag {
 			case "":
-				result.AddWarning(name, "image", fmt.Sprintf(
+				result.AddWarning("image-untagged", name, "image", fmt.Sprintf(
 					"'%s' has no tag — Docker defaults to ':latest', which can pull a different image on every 'docker compose pull' with no change to this file; pin an explicit version",
 					cfg.Image))
 			case "latest":
-				result.AddWarning(name, "image", fmt.Sprintf(
+				result.AddWarning("image-latest", name, "image", fmt.Sprintf(
 					"'%s' is explicitly pinned to ':latest', which can still pull a different image on every 'docker compose pull' with no change to this file; pin an explicit version instead",
 					cfg.Image))
 			default:
 				if isRollingTag(tag) {
-					result.AddWarning(name, "image", fmt.Sprintf(
+					result.AddWarning("image-rolling-tag", name, "image", fmt.Sprintf(
 						"'%s' uses the rolling tag ':%s', which moves to a new release over time with no change to this file; pin a specific version (or an @sha256 digest for fully reproducible deploys)",
 						cfg.Image, tag))
 				}
@@ -178,14 +184,14 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	// Validate port formats
 	for _, port := range cfg.Ports {
 		if !isValidPort(port) {
-			result.Add(name, "ports", fmt.Sprintf("invalid port format: '%s' (expected: [ip:][host[-end]:]container[-end][/protocol], IPv6 as [addr])", port))
+			result.Add("invalid-port", name, "ports", fmt.Sprintf("invalid port format: '%s' (expected: [ip:][host[-end]:]container[-end][/protocol], IPv6 as [addr])", port))
 		}
 	}
 
 	// Validate environment variables format
 	for _, env := range cfg.Environment {
 		if !strings.Contains(env, "=") {
-			result.Add(name, "environment", fmt.Sprintf("invalid format: '%s' (expected: KEY=value)", env))
+			result.Add("invalid-environment-entry", name, "environment", fmt.Sprintf("invalid format: '%s' (expected: KEY=value)", env))
 		}
 	}
 
@@ -198,26 +204,26 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 			"unless-stopped": true,
 		}
 		if !validRestarts[cfg.Restart] {
-			result.Add(name, "restart", fmt.Sprintf("invalid policy: '%s' (expected: no, always, on-failure, unless-stopped)", cfg.Restart))
+			result.Add("invalid-restart-policy", name, "restart", fmt.Sprintf("invalid policy: '%s' (expected: no, always, on-failure, unless-stopped)", cfg.Restart))
 		}
 	}
 
 	// Validate healthcheck if present
 	if cfg.HealthCheck != nil {
 		if len(cfg.HealthCheck.Test) == 0 {
-			result.Add(name, "healthcheck.test", "test command is required")
+			result.Add("healthcheck-test-required", name, "healthcheck.test", "test command is required")
 		}
 		if cfg.HealthCheck.Interval != "" && !isValidDuration(cfg.HealthCheck.Interval) {
-			result.Add(name, "healthcheck.interval", fmt.Sprintf("invalid duration: '%s'", cfg.HealthCheck.Interval))
+			result.Add("invalid-healthcheck-duration", name, "healthcheck.interval", fmt.Sprintf("invalid duration: '%s'", cfg.HealthCheck.Interval))
 		}
 		if cfg.HealthCheck.Timeout != "" && !isValidDuration(cfg.HealthCheck.Timeout) {
-			result.Add(name, "healthcheck.timeout", fmt.Sprintf("invalid duration: '%s'", cfg.HealthCheck.Timeout))
+			result.Add("invalid-healthcheck-duration", name, "healthcheck.timeout", fmt.Sprintf("invalid duration: '%s'", cfg.HealthCheck.Timeout))
 		}
 		if cfg.HealthCheck.StartPeriod != "" && !isValidDuration(cfg.HealthCheck.StartPeriod) {
-			result.Add(name, "healthcheck.start_period", fmt.Sprintf("invalid duration: '%s'", cfg.HealthCheck.StartPeriod))
+			result.Add("invalid-healthcheck-duration", name, "healthcheck.start_period", fmt.Sprintf("invalid duration: '%s'", cfg.HealthCheck.StartPeriod))
 		}
 		if cfg.HealthCheck.StartInterval != "" && !isValidDuration(cfg.HealthCheck.StartInterval) {
-			result.Add(name, "healthcheck.start_interval", fmt.Sprintf("invalid duration: '%s'", cfg.HealthCheck.StartInterval))
+			result.Add("invalid-healthcheck-duration", name, "healthcheck.start_interval", fmt.Sprintf("invalid duration: '%s'", cfg.HealthCheck.StartInterval))
 		}
 	}
 
@@ -233,7 +239,7 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	// "reachable from this machine only".
 	for _, port := range cfg.PortStrings() {
 		if isValidPort(port) && isPortExposedToAllInterfaces(port) {
-			result.AddWarning(name, "ports", fmt.Sprintf(
+			result.AddWarning("port-all-interfaces", name, "ports", fmt.Sprintf(
 				"'%s' is published on all network interfaces (Docker's default) — "+
 					"if you only need it reachable from this machine, use '%s' instead",
 				port, suggestLocalhostPort(port)))
@@ -241,12 +247,12 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	}
 
 	if cfg.Privileged {
-		result.AddWarning(name, "privileged", "runs with 'privileged: true' — this gives the container "+
+		result.AddWarning("privileged", name, "privileged", "runs with 'privileged: true' — this gives the container "+
 			"full access to the host's devices and kernel capabilities; only use it if the service genuinely needs it")
 	}
 
 	if cfg.User == "root" || cfg.User == "0" {
-		result.AddWarning(name, "user", "explicitly runs as 'root' — consider a non-root user if the image supports it")
+		result.AddWarning("user-root", name, "user", "explicitly runs as 'root' — consider a non-root user if the image supports it")
 	}
 
 	// The remaining checks below all read from cfg.Extra rather than a
@@ -262,7 +268,7 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	// this is advisory, same as 'privileged' above.
 	for _, vol := range cfg.VolumeStrings() {
 		if strings.Contains(vol, "/var/run/docker.sock") {
-			result.AddWarning(name, "volumes",
+			result.AddWarning("docker-socket", name, "volumes",
 				"mounts the Docker socket ('/var/run/docker.sock') — anyone who can reach this "+
 					"container can control the host's Docker daemon, which is equivalent to root on "+
 					"the host; only do this if the service genuinely needs it (e.g. Portainer, Watchtower)")
@@ -274,7 +280,7 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 		if caps, ok := decodeScalarList(&capNode); ok {
 			for _, capName := range caps {
 				if dangerousCapabilities[strings.ToUpper(strings.TrimSpace(capName))] {
-					result.AddWarning(name, "cap_add", fmt.Sprintf(
+					result.AddWarning("dangerous-capability", name, "cap_add", fmt.Sprintf(
 						"adds capability '%s' — this significantly widens what the container can do "+
 							"to the host; only add capabilities the service specifically needs",
 						capName))
@@ -284,13 +290,13 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	}
 
 	if modeNode, ok := cfg.Extra["network_mode"]; ok && modeNode.Kind == yaml.ScalarNode && strings.EqualFold(modeNode.Value, "host") {
-		result.AddWarning(name, "network_mode",
+		result.AddWarning("host-network", name, "network_mode",
 			"runs with 'network_mode: host' — this removes network isolation between the container "+
 				"and the host; only use it if the service genuinely needs it")
 	}
 
 	if pidNode, ok := cfg.Extra["pid"]; ok && pidNode.Kind == yaml.ScalarNode && strings.EqualFold(pidNode.Value, "host") {
-		result.AddWarning(name, "pid",
+		result.AddWarning("host-pid", name, "pid",
 			"runs with 'pid: host' — the container can see and interact with every process on the host")
 	}
 
@@ -298,7 +304,7 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 		if opts, ok := decodeScalarList(&secOptNode); ok {
 			for _, opt := range opts {
 				if strings.Contains(strings.ToLower(opt), "unconfined") {
-					result.AddWarning(name, "security_opt", fmt.Sprintf(
+					result.AddWarning("security-opt-unconfined", name, "security_opt", fmt.Sprintf(
 						"'%s' disables a security sandbox (seccomp/AppArmor) for this container", opt))
 				}
 			}
@@ -309,13 +315,13 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 		key, empty, hardcoded := classifySecretEnv(env)
 		switch {
 		case empty:
-			result.AddWarning(name, "environment", fmt.Sprintf(
+			result.AddWarning("secret-empty", name, "environment", fmt.Sprintf(
 				"'%s' looks like a secret but has no value set — an empty password is "+
 					"just as risky as a hardcoded one (some images even disable auth entirely "+
 					"when it's blank); set it via env_file or ${%s}, or remove the key if it's genuinely unused",
 				key, key))
 		case hardcoded:
-			result.AddWarning(name, "environment", fmt.Sprintf(
+			result.AddWarning("secret-hardcoded", name, "environment", fmt.Sprintf(
 				"'%s' looks like a secret with a value hardcoded directly in the compose file — "+
 					"consider an env_file, Docker secrets, or ${%s} substituted from your shell/CI instead",
 				key, key))
@@ -328,7 +334,7 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	// images recognized as stateful (see databaseDataDirs); it has no
 	// way to know that about an arbitrary custom image.
 	if dir, ok := suggestedDataDir(cfg.Image); ok && !cfg.HasVolumes() {
-		result.AddWarning(name, "volumes", fmt.Sprintf(
+		result.AddWarning("database-no-volume", name, "volumes", fmt.Sprintf(
 			"'%s' looks like a database with no volumes configured — data will be lost "+
 				"every time the container is removed or recreated; consider a volume such as './data:%s'",
 			cfg.Image, dir))
@@ -342,7 +348,7 @@ func (c *ComposeConfig) validateService(name string, cfg *ServiceConfig, result 
 	// check above; same limitation, too — it has no way to know this
 	// about an arbitrary custom image.
 	if hc, ok := suggestedHealthCheck(cfg.Image); ok && !cfg.HasHealthCheck() {
-		result.AddWarning(name, "healthcheck", fmt.Sprintf(
+		result.AddWarning("database-no-healthcheck", name, "healthcheck", fmt.Sprintf(
 			"'%s' looks like a database with no healthcheck configured — anything with "+
 				"'depends_on: %s' can only wait for the process to start, not for it to actually "+
 				"be ready to accept connections; consider a healthcheck such as %s",

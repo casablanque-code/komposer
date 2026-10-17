@@ -264,9 +264,13 @@ JSON schema).
 | `1` | problems found |
 | `2` | bad arguments, or the file could not be read |
 
+Every error and warning carries a stable rule ID such as
+`port-all-interfaces` or `docker-socket` (shown in brackets in the text
+output). IDs never change once released.
+
 JSON output has the shape
 `{"file", "strict", "passed", "errors": [...], "warnings": [...], "spec": {"valid", "issues": [...]}}`;
-each finding is `{"service", "field", "message"}`. In a GitHub Actions
+each finding is `{"rule", "service", "field", "message"}`. In a GitHub Actions
 step, `komposer check --strict compose.yaml` is all it takes to gate a
 pull request.
 

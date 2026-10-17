@@ -225,3 +225,31 @@ func TestStylerIsApplied(t *testing.T) {
 		t.Errorf("styler not applied:\n%s", out.String())
 	}
 }
+
+func TestFindingsShowRuleIDs(t *testing.T) {
+	p := writeFile(t, t.TempDir(), "compose.yaml", warnYAML)
+
+	_, out, _ := run(t, p)
+	if !strings.Contains(out, "[port-all-interfaces] service 'web': ports:") {
+		t.Errorf("text output should lead each finding with its rule ID:\n%s", out)
+	}
+
+	_, out, _ = run(t, "--format=json", p)
+	var rep Report
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Warnings) != 1 || rep.Warnings[0].Rule != "port-all-interfaces" {
+		t.Errorf("JSON warning should carry its rule: %+v", rep.Warnings)
+	}
+
+	e := writeFile(t, t.TempDir(), "compose.yaml", errorYAML)
+	_, out, _ = run(t, "--format=json", e)
+	rep = Report{}
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Errors) != 1 || rep.Errors[0].Rule != "image-or-build-required" {
+		t.Errorf("JSON error should carry its rule: %+v", rep.Errors)
+	}
+}

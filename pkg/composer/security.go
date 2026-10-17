@@ -78,7 +78,7 @@ func validateSensitiveMounts(name string, cfg *ServiceConfig, result *Validation
 		if !sensitiveHostDirs[src] {
 			continue
 		}
-		result.AddWarning(name, "volumes", fmt.Sprintf(
+		result.AddWarning("sensitive-host-mount", name, "volumes", fmt.Sprintf(
 			"bind-mounts the host directory '%s' read-write — a compromised container could modify "+
 				"the host itself through it; mount it read-only (':ro') or narrow the mount to just "+
 				"the files the service needs", src))
@@ -94,17 +94,17 @@ func extraIsHost(cfg *ServiceConfig, key string) bool {
 
 func validateHostNamespaces(name string, cfg *ServiceConfig, result *ValidationResult) {
 	if extraIsHost(cfg, "ipc") {
-		result.AddWarning(name, "ipc",
+		result.AddWarning("host-ipc", name, "ipc",
 			"runs with 'ipc: host' — the container shares the host's shared memory and message queues, "+
 				"so it can read and interfere with other processes' IPC")
 	}
 	if extraIsHost(cfg, "userns_mode") {
-		result.AddWarning(name, "userns_mode",
+		result.AddWarning("host-userns", name, "userns_mode",
 			"runs with 'userns_mode: host' — this turns off user-namespace remapping, so root inside "+
 				"the container is root on the host")
 	}
 	if extraIsHost(cfg, "cgroup") {
-		result.AddWarning(name, "cgroup",
+		result.AddWarning("host-cgroup", name, "cgroup",
 			"runs with 'cgroup: host' — the container shares the host's cgroup namespace and can see "+
 				"every cgroup on the machine")
 	}
@@ -124,7 +124,7 @@ func validateNoNewPrivileges(name string, cfg *ServiceConfig, result *Validation
 	for _, opt := range opts {
 		norm := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(opt), " ", ""))
 		if norm == "no-new-privileges:false" || norm == "no-new-privileges=false" {
-			result.AddWarning(name, "security_opt", fmt.Sprintf(
+			result.AddWarning("no-new-privileges-disabled", name, "security_opt", fmt.Sprintf(
 				"'%s' explicitly lets processes in the container gain more privileges through "+
 					"setuid binaries; remove it, or set 'no-new-privileges:true'", opt))
 		}
@@ -249,10 +249,10 @@ func validateDatabaseAuth(name string, cfg *ServiceConfig, result *ValidationRes
 			if exposed {
 				msg += " — and its port is published on all interfaces"
 			}
-			result.AddWarning(name, "environment", msg)
+			result.AddWarning("postgres-trust-auth", name, "environment", msg)
 		}
 		if exposed && !envUnknown && !envProvided(cfg.Environment, "POSTGRES_PASSWORD", "POSTGRESQL_PASSWORD") {
-			result.AddWarning(name, "environment",
+			result.AddWarning("postgres-no-password", name, "environment",
 				"postgres is published on the network with no POSTGRES_PASSWORD set — "+
 					"without one, anyone who can reach this port has full database access")
 		}
@@ -262,7 +262,7 @@ func validateDatabaseAuth(name string, cfg *ServiceConfig, result *ValidationRes
 		authConfigured := envProvided(cfg.Environment, "MONGO_INITDB_ROOT_USERNAME", "MONGODB_ROOT_PASSWORD") ||
 			strings.Contains(cmd, "--auth") || strings.Contains(cmd, "--keyfile")
 		if exposed && !envUnknown && !authConfigured {
-			result.AddWarning(name, "environment",
+			result.AddWarning("mongo-no-auth", name, "environment",
 				"mongo is published on the network with no authentication configured (no "+
 					"MONGO_INITDB_ROOT_USERNAME/PASSWORD, no --auth) — MongoDB then starts without access "+
 					"control, so anyone who can reach this port has full database access")
@@ -275,7 +275,7 @@ func validateDatabaseAuth(name string, cfg *ServiceConfig, result *ValidationRes
 				if exposed {
 					msg += " — and this service's port is published on all interfaces"
 				}
-				result.AddWarning(name, "environment", msg)
+				result.AddWarning("mysql-empty-password", name, "environment", msg)
 			}
 		}
 	}
@@ -329,7 +329,7 @@ func (c *ComposeConfig) validateDependencyCycles(result *ValidationResult) {
 				key := canonicalCycle(cycle)
 				if !reported[key] {
 					reported[key] = true
-					result.Add(cycle[0], "depends_on", fmt.Sprintf(
+					result.Add("depends-on-cycle", cycle[0], "depends_on", fmt.Sprintf(
 						"dependency cycle: %s — Compose will refuse to start this stack",
 						strings.Join(append(cycle, cycle[0]), " → ")))
 				}

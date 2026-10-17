@@ -60,6 +60,9 @@ Examples:
 
 // Finding is one error or warning from komposer's own checks.
 type Finding struct {
+	// Rule is the stable rule ID (see pkg/composer/rules.go); empty for
+	// findings that don't come from a rule, such as a failed import.
+	Rule    string `json:"rule,omitempty"`
 	Service string `json:"service,omitempty"`
 	Field   string `json:"field"`
 	Message string `json:"message"`
@@ -123,10 +126,10 @@ func Analyze(path string, strict bool) (Report, error) {
 	} else {
 		res := cfg.Validate()
 		for _, e := range res.Errors {
-			rep.Errors = append(rep.Errors, Finding{Service: e.Service, Field: e.Field, Message: e.Message})
+			rep.Errors = append(rep.Errors, Finding{Rule: e.Rule, Service: e.Service, Field: e.Field, Message: e.Message})
 		}
 		for _, w := range res.Warnings {
-			rep.Warnings = append(rep.Warnings, Finding{Service: w.Service, Field: w.Field, Message: w.Message})
+			rep.Warnings = append(rep.Warnings, Finding{Rule: w.Rule, Service: w.Service, Field: w.Field, Message: w.Message})
 		}
 	}
 
@@ -265,6 +268,15 @@ func Run(args []string, stdout, stderr io.Writer, st Styler) int {
 	return ExitFail
 }
 
+// line renders a finding with its rule ID in front, dimmed, so the ID is
+// easy to spot and to copy into `komposer explain` or a config file.
+func line(f Finding, st Styler) string {
+	if f.Rule == "" {
+		return f.String()
+	}
+	return st.Dim("["+f.Rule+"]") + " " + f.String()
+}
+
 func plural(n int, word string) string {
 	if n == 1 {
 		return fmt.Sprintf("1 %s", word)
@@ -280,7 +292,7 @@ func render(w io.Writer, rep Report, st Styler) {
 	} else {
 		fmt.Fprintln(w, st.Error(fmt.Sprintf("✗ Errors (%d)", len(rep.Errors))))
 		for _, f := range rep.Errors {
-			fmt.Fprintf(w, "    %s\n", f)
+			fmt.Fprintf(w, "    %s\n", line(f, st))
 		}
 	}
 
@@ -289,7 +301,7 @@ func render(w io.Writer, rep Report, st Styler) {
 	} else {
 		fmt.Fprintln(w, st.Warn(fmt.Sprintf("⚠ Warnings (%d)", len(rep.Warnings))))
 		for _, f := range rep.Warnings {
-			fmt.Fprintf(w, "    %s\n", f)
+			fmt.Fprintf(w, "    %s\n", line(f, st))
 		}
 	}
 
